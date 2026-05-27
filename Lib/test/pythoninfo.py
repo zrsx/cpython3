@@ -289,6 +289,8 @@ def collect_os(info_add):
         "DISTUTILS_USE_SDK",
         "DYLD_LIBRARY_PATH",
         "ENSUREPIP_OPTIONS",
+        "FORCE_COLOR",
+        "GITHUB_ACTIONS",
         "HISTORY_FILE",
         "HOME",
         "HOMEDRIVE",
@@ -305,11 +307,13 @@ def collect_os(info_add):
         "MAKEFLAGS",
         "MIXERDEV",
         "MSSDK",
+        "NO_COLOR",
         "PATH",
         "PATHEXT",
         "PIP_CONFIG_FILE",
         "PLAT",
         "POSIXLY_CORRECT",
+        "PYTHON_COLORS",
         "PY_SAX_PARSER",
         "ProgramFiles",
         "ProgramFiles(x86)",
@@ -733,6 +737,10 @@ def collect_test_socket(info_add):
     attributes = [name for name in dir(test_socket)
                   if name.startswith('HAVE_')]
     copy_attributes(info_add, test_socket, 'test_socket.%s', attributes)
+
+    # Get IOCTL_VM_SOCKETS_GET_LOCAL_CID of /dev/vsock
+    cid = test_socket.get_cid()
+    info_add('test_socket.get_cid', cid)
 
 
 def collect_support(info_add):

@@ -763,6 +763,8 @@ inline_comprehension(PySTEntryObject *ste, PySTEntryObject *comp,
     PyObject *k, *v;
     Py_ssize_t pos = 0;
     int remove_dunder_class = 0;
+    int remove_dunder_classdict = 0;
+    int remove_dunder_cond_annotations = 0;
 
     while (PyDict_Next(comp->ste_symbols, &pos, &k, &v)) {
         // skip comprehension parameter
@@ -782,15 +784,27 @@ inline_comprehension(PySTEntryObject *ste, PySTEntryObject *comp,
         if (existing == NULL && PyErr_Occurred()) {
             return 0;
         }
-        // __class__ is never allowed to be free through a class scope (see
+        // __class__, __classdict__ and __conditional_annotations__ are
+        // never allowed to be free through a class scope (see
         // drop_class_free)
         if (scope == FREE && ste->ste_type == ClassBlock &&
-                _PyUnicode_EqualToASCIIString(k, "__class__")) {
+                (_PyUnicode_EqualToASCIIString(k, "__class__") ||
+                 _PyUnicode_EqualToASCIIString(k, "__classdict__") ||
+                 _PyUnicode_EqualToASCIIString(k, "__conditional_annotations__"))) {
             scope = GLOBAL_IMPLICIT;
             if (PySet_Discard(comp_free, k) < 0) {
                 return 0;
             }
-            remove_dunder_class = 1;
+
+            if (_PyUnicode_EqualToASCIIString(k, "__class__")) {
+                remove_dunder_class = 1;
+            }
+            else if (_PyUnicode_EqualToASCIIString(k, "__conditional_annotations__")) {
+                remove_dunder_cond_annotations = 1;
+            }
+            else {
+                remove_dunder_classdict = 1;
+            }
         }
         if (!existing) {
             // name does not exist in scope, copy from comprehension
@@ -821,6 +835,12 @@ inline_comprehension(PySTEntryObject *ste, PySTEntryObject *comp,
     }
     comp->ste_free = PySet_Size(comp_free) > 0;
     if (remove_dunder_class && PyDict_DelItemString(comp->ste_symbols, "__class__") < 0) {
+        return 0;
+    }
+    if (remove_dunder_classdict && PyDict_DelItemString(comp->ste_symbols, "__classdict__") < 0) {
+        return 0;
+    }
+    if (remove_dunder_cond_annotations && PyDict_DelItemString(comp->ste_symbols, "__conditional_annotations__") < 0) {
         return 0;
     }
     return 1;
@@ -2292,12 +2312,27 @@ symtable_visit_expr(struct symtable *st, expr_ty e)
 static int
 symtable_visit_type_param_bound_or_default(
     struct symtable *st, expr_ty e, identifier name,
-    void *key, const char *ste_scope_info)
+    type_param_ty tp, const char *ste_scope_info)
 {
+    if (_PyUnicode_Equal(name, &_Py_ID(__classdict__))) {
+
+        PyObject *error_msg = PyUnicode_FromFormat("reserved name '%U' cannot be "
+                                                   "used for type parameter", name);
+        PyErr_SetObject(PyExc_SyntaxError, error_msg);
+        Py_DECREF(error_msg);
+        PyErr_RangedSyntaxLocationObject(st->st_filename,
+                                         tp->lineno,
+                                         tp->col_offset + 1,
+                                         tp->end_lineno,
+                                         tp->end_col_offset + 1);
+        return 0;
+    }
+
     if (e) {
         int is_in_class = st->st_cur->ste_can_see_class_scope;
-        if (!symtable_enter_block(st, name, TypeVariableBlock, key, LOCATION(e)))
+        if (!symtable_enter_block(st, name, TypeVariableBlock, (void *)tp, LOCATION(e))) {
             return 0;
+        }
 
         st->st_cur->ste_can_see_class_scope = is_in_class;
         if (is_in_class && !symtable_add_def(st, &_Py_ID(__classdict__), USE, LOCATION(e))) {
@@ -2341,12 +2376,12 @@ symtable_visit_type_param(struct symtable *st, type_param_ty tp)
         // The only requirement for the key is that it is unique and it matches the logic in
         // compile.c where the scope is retrieved.
         if (!symtable_visit_type_param_bound_or_default(st, tp->v.TypeVar.bound, tp->v.TypeVar.name,
-                                                        (void *)tp, ste_scope_info)) {
+                                                        tp, ste_scope_info)) {
             VISIT_QUIT(st, 0);
         }
 
         if (!symtable_visit_type_param_bound_or_default(st, tp->v.TypeVar.default_value, tp->v.TypeVar.name,
-                                                        (void *)((uintptr_t)tp + 1), "a TypeVar default")) {
+                                                        (type_param_ty)((uintptr_t)tp + 1), "a TypeVar default")) {
             VISIT_QUIT(st, 0);
         }
         break;
@@ -2356,7 +2391,7 @@ symtable_visit_type_param(struct symtable *st, type_param_ty tp)
         }
 
         if (!symtable_visit_type_param_bound_or_default(st, tp->v.TypeVarTuple.default_value, tp->v.TypeVarTuple.name,
-                                                        (void *)tp, "a TypeVarTuple default")) {
+                                                        tp, "a TypeVarTuple default")) {
             VISIT_QUIT(st, 0);
         }
         break;
@@ -2366,7 +2401,7 @@ symtable_visit_type_param(struct symtable *st, type_param_ty tp)
         }
 
         if (!symtable_visit_type_param_bound_or_default(st, tp->v.ParamSpec.default_value, tp->v.ParamSpec.name,
-                                                        (void *)tp, "a ParamSpec default")) {
+                                                        tp, "a ParamSpec default")) {
             VISIT_QUIT(st, 0);
         }
         break;

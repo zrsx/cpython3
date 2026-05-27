@@ -7,6 +7,7 @@
 #include "pycore_moduleobject.h"  // _PyModule_GetState()
 #include "pycore_parking_lot.h"
 #include "pycore_time.h"          // _PyTime_FromSecondsObject()
+#include "pycore_weakref.h"       // FT_CLEAR_WEAKREFS()
 
 #include <stdbool.h>
 #include <stddef.h>               // offsetof()
@@ -164,6 +165,7 @@ RingBuf_Put(RingBuf *buf, PyObject *item)
         // Buffer is full, grow it.
         if (resize_ringbuf(buf, buf->items_cap * 2) < 0) {
             PyErr_NoMemory();
+            Py_DECREF(item);
             return -1;
         }
     }
@@ -217,8 +219,7 @@ simplequeue_dealloc(simplequeueobject *self)
 
     PyObject_GC_UnTrack(self);
     (void)simplequeue_clear(self);
-    if (self->weakreflist != NULL)
-        PyObject_ClearWeakRefs((PyObject *) self);
+    FT_CLEAR_WEAKREFS((PyObject *) self, self->weakreflist);
     Py_TYPE(self)->tp_free(self);
     Py_DECREF(tp);
 }

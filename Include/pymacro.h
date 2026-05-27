@@ -31,6 +31,12 @@
 
 /* Absolute value of the number x */
 #define Py_ABS(x) ((x) < 0 ? -(x) : (x))
+/* Safer implementation that avoids an undefined behavior for the minimal
+   value of the signed integer type if its absolute value is larger than
+   the maximal value of the signed integer type (in the two's complement
+   representations, which is common).
+ */
+#define _Py_ABS_CAST(T, x) ((x) >= 0 ? ((T) (x)) : ((T) (((T) -((x) + 1)) + 1u)))
 
 #define _Py_XSTRINGIFY(x) #x
 
@@ -47,7 +53,7 @@
 #define Py_CHARMASK(c) ((unsigned char)((c) & 0xff))
 
 #if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L \
-     && !defined(__cplusplus))
+     && !defined(__cplusplus) && !defined(_MSC_VER))
 #  define Py_BUILD_ASSERT_EXPR(cond) \
     ((void)sizeof(struct { int dummy; _Static_assert(cond, #cond); }), \
      0)

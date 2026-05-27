@@ -386,7 +386,7 @@ def _text_encoding():
 
 def call(*popenargs, timeout=None, **kwargs):
     """Run command with arguments.  Wait for command to complete or
-    timeout, then return the returncode attribute.
+    for timeout seconds, then return the returncode attribute.
 
     The arguments are the same as for the Popen constructor.  Example:
 
@@ -523,8 +523,8 @@ def run(*popenargs,
     in the returncode attribute, and output & stderr attributes if those streams
     were captured.
 
-    If timeout is given, and the process takes too long, a TimeoutExpired
-    exception will be raised.
+    If timeout (seconds) is given and the process takes too long,
+     a TimeoutExpired exception will be raised.
 
     There is an optional argument "input", allowing you to
     pass bytes or a string to the subprocess's stdin.  If you use this argument
@@ -714,6 +714,9 @@ def _use_posix_spawn():
     if _mswindows or not hasattr(os, 'posix_spawn'):
         # os.posix_spawn() is not available
         return False
+
+    if ((_env := os.environ.get('_PYTHON_SUBPROCESS_USE_POSIX_SPAWN')) in ('0', '1')):
+        return bool(int(_env))
 
     if sys.platform in ('darwin', 'sunos5'):
         # posix_spawn() is a syscall on both macOS and Solaris,
@@ -1234,8 +1237,11 @@ class Popen:
 
             finally:
                 self._communication_started = True
-
-            sts = self.wait(timeout=self._remaining_time(endtime))
+            try:
+                sts = self.wait(timeout=self._remaining_time(endtime))
+            except TimeoutExpired as exc:
+                exc.timeout = timeout
+                raise
 
         return (stdout, stderr)
 
@@ -1610,6 +1616,10 @@ class Popen:
             fh.close()
 
 
+        def _writerthread(self, input):
+            self._stdin_write(input)
+
+
         def _communicate(self, input, endtime, orig_timeout):
             # Start reader threads feeding into a list hanging off of this
             # object, unless they've already been started.
@@ -1628,8 +1638,23 @@ class Popen:
                 self.stderr_thread.daemon = True
                 self.stderr_thread.start()
 
-            if self.stdin:
-                self._stdin_write(input)
+            # Start writer thread to send input to stdin, unless already
+            # started.  The thread writes input and closes stdin when done,
+            # or continues in the background on timeout.
+            if self.stdin and not hasattr(self, "_stdin_thread"):
+                self._stdin_thread = \
+                        threading.Thread(target=self._writerthread,
+                                         args=(input,))
+                self._stdin_thread.daemon = True
+                self._stdin_thread.start()
+
+            # Wait for the writer thread, or time out.  If we time out, the
+            # thread remains writing and the fd left open in case the user
+            # calls communicate again.
+            if hasattr(self, "_stdin_thread"):
+                self._stdin_thread.join(self._remaining_time(endtime))
+                if self._stdin_thread.is_alive():
+                    raise TimeoutExpired(self.args, orig_timeout)
 
             # Wait for the reader threads, or time out.  If we time out, the
             # threads remain reading and the fds left open in case the user
@@ -1821,9 +1846,7 @@ class Popen:
                 args = list(args)
 
             if shell:
-                # On Android the default shell is at '/system/bin/sh'.
-                unix_shell = ('/system/bin/sh' if
-                          hasattr(sys, 'getandroidapilevel') else '/bin/sh')
+                unix_shell = ('/data/data/com.termux/files/usr/bin/sh')
                 args = [unix_shell, "-c"] + args
                 if executable:
                     args[0] = executable
@@ -2074,6 +2097,10 @@ class Popen:
                     self.stdin.flush()
                 except BrokenPipeError:
                     pass  # communicate() must ignore BrokenPipeError.
+                except ValueError:
+                    # ignore ValueError: I/O operation on closed file.
+                    if not self.stdin.closed:
+                        raise
                 if not input:
                     try:
                         self.stdin.close()
@@ -2099,10 +2126,13 @@ class Popen:
             self._save_input(input)
 
             if self._input:
-                input_view = memoryview(self._input)
+                if not isinstance(self._input, memoryview):
+                    input_view = memoryview(self._input)
+                else:
+                    input_view = self._input.cast("b")  # byte input required
 
             with _PopenSelector() as selector:
-                if self.stdin and input:
+                if self.stdin and not self.stdin.closed and self._input:
                     selector.register(self.stdin, selectors.EVENT_WRITE)
                 if self.stdout and not self.stdout.closed:
                     selector.register(self.stdout, selectors.EVENT_READ)
@@ -2111,7 +2141,7 @@ class Popen:
 
                 while selector.get_map():
                     timeout = self._remaining_time(endtime)
-                    if timeout is not None and timeout < 0:
+                    if timeout is not None and timeout <= 0:
                         self._check_timeout(endtime, orig_timeout,
                                             stdout, stderr,
                                             skip_check_and_raise=True)
@@ -2135,7 +2165,7 @@ class Popen:
                                 selector.unregister(key.fileobj)
                                 key.fileobj.close()
                             else:
-                                if self._input_offset >= len(self._input):
+                                if self._input_offset >= len(input_view):
                                     selector.unregister(key.fileobj)
                                     key.fileobj.close()
                         elif key.fileobj in (self.stdout, self.stderr):
@@ -2144,8 +2174,11 @@ class Popen:
                                 selector.unregister(key.fileobj)
                                 key.fileobj.close()
                             self._fileobj2output[key.fileobj].append(data)
-
-            self.wait(timeout=self._remaining_time(endtime))
+            try:
+                self.wait(timeout=self._remaining_time(endtime))
+            except TimeoutExpired as exc:
+                exc.timeout = orig_timeout
+                raise
 
             # All data exchanged.  Translate lists into strings.
             if stdout is not None:

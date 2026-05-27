@@ -10,6 +10,7 @@
 #include "pycore_pymem.h"         // _PyMem_SetDefaultAllocator()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
 #include "pycore_pystats.h"       // _Py_StatsOn()
+#include "pycore_sysmodule.h"     // _PySys_GetOptionalAttrString()
 
 #include "osdefs.h"               // DELIM
 
@@ -129,6 +130,7 @@ static const PyConfigSpec PYCONFIG_SPEC[] = {
 #ifdef Py_DEBUG
     SPEC(run_presite, WSTR_OPT),
 #endif
+
     {NULL, 0, 0},
 };
 
@@ -155,7 +157,7 @@ Options (and corresponding environment variables):\n\
 -h     : print this help message and exit (also -? or --help)\n\
 -i     : inspect interactively after running script; forces a prompt even\n\
          if stdin does not appear to be a terminal; also PYTHONINSPECT=x\n\
--I     : isolate Python from the user's environment (implies -E and -s)\n\
+-I     : isolate Python from the user's environment (implies -E, -P and -s)\n\
 -m mod : run library module as a script (terminates option list)\n\
 -O     : remove assert and __debug__-dependent statements; add .opt-1 before\n\
          .pyc extension; also PYTHONOPTIMIZE=x\n\
@@ -209,6 +211,8 @@ The following implementation-specific options are available:\n\
 -X no_debug_ranges: don't include extra location information in code objects;\n\
          also PYTHONNODEBUGRANGES\n\
 -X perf: support the Linux \"perf\" profiler; also PYTHONPERFSUPPORT=1\n\
+-X perf_jit: support the Linux \"perf\" profiler with DWARF support;\n\
+         also PYTHON_PERF_JIT_SUPPORT=1\n\
 "
 #ifdef Py_DEBUG
 "-X presite=MOD: import this module before site; also PYTHON_PRESITE\n"
@@ -234,32 +238,32 @@ The following implementation-specific options are available:\n\
 /* Envvars that don't have equivalent command-line options are listed first */
 static const char usage_envvars[] =
 "Environment variables that change behavior:\n"
-"PYTHONSTARTUP   : file executed on interactive startup (no default)\n"
-"PYTHONPATH      : '%lc'-separated list of directories prefixed to the\n"
-"                  default module search path.  The result is sys.path.\n"
-"PYTHONHOME      : alternate <prefix> directory (or <prefix>%lc<exec_prefix>).\n"
-"                  The default module search path uses %s.\n"
-"PYTHONPLATLIBDIR: override sys.platlibdir\n"
+"PYTHONBREAKPOINT: if this variable is set to 0, it disables the default\n"
+"                  debugger.  It can be set to the callable of your debugger of\n"
+"                  choice.\n"
 "PYTHONCASEOK    : ignore case in 'import' statements (Windows)\n"
-"PYTHONIOENCODING: encoding[:errors] used for stdin/stdout/stderr\n"
-"PYTHONHASHSEED  : if this variable is set to 'random', a random value is used\n"
-"                  to seed the hashes of str and bytes objects.  It can also be\n"
-"                  set to an integer in the range [0,4294967295] to get hash\n"
-"                  values with a predictable seed.\n"
-"PYTHONMALLOC    : set the Python memory allocators and/or install debug hooks\n"
-"                  on Python memory allocators.  Use PYTHONMALLOC=debug to\n"
-"                  install debug hooks.\n"
 "PYTHONCOERCECLOCALE: if this variable is set to 0, it disables the locale\n"
 "                  coercion behavior.  Use PYTHONCOERCECLOCALE=warn to request\n"
 "                  display of locale coercion and locale compatibility warnings\n"
 "                  on stderr.\n"
-"PYTHONBREAKPOINT: if this variable is set to 0, it disables the default\n"
-"                  debugger.  It can be set to the callable of your debugger of\n"
-"                  choice.\n"
 "PYTHON_COLORS   : if this variable is set to 1, the interpreter will colorize\n"
 "                  various kinds of output.  Setting it to 0 deactivates\n"
 "                  this behavior.\n"
+"PYTHONHASHSEED  : if this variable is set to 'random', a random value is used\n"
+"                  to seed the hashes of str and bytes objects.  It can also be\n"
+"                  set to an integer in the range [0,4294967295] to get hash\n"
+"                  values with a predictable seed.\n"
 "PYTHON_HISTORY  : the location of a .python_history file.\n"
+"PYTHONHOME      : alternate <prefix> directory (or <prefix>%lc<exec_prefix>).\n"
+"                  The default module search path uses %s.\n"
+"PYTHONIOENCODING: encoding[:errors] used for stdin/stdout/stderr\n"
+"PYTHONMALLOC    : set the Python memory allocators and/or install debug hooks\n"
+"                  on Python memory allocators.  Use PYTHONMALLOC=debug to\n"
+"                  install debug hooks.\n"
+"PYTHONPATH      : '%lc'-separated list of directories prefixed to the\n"
+"                  default module search path.  The result is sys.path.\n"
+"PYTHONPLATLIBDIR: override sys.platlibdir\n"
+"PYTHONSTARTUP   : file executed on interactive startup (no default)\n"
 "\n"
 "These variables have equivalent command-line options (see --help for details):\n"
 "PYTHON_CPU_COUNT: override the return value of os.cpu_count() (-X cpu_count)\n"
@@ -349,7 +353,7 @@ _Py_COMP_DIAG_IGNORE_DEPR_DECLS
         do { \
             obj = (EXPR); \
             if (obj == NULL) { \
-                return NULL; \
+                goto fail; \
             } \
             int res = PyDict_SetItemString(dict, (KEY), obj); \
             Py_DECREF(obj); \
@@ -1572,7 +1576,9 @@ config_read_env_vars(PyConfig *config)
     _Py_get_env_flag(use_env, &config->parser_debug, "PYTHONDEBUG");
     _Py_get_env_flag(use_env, &config->verbose, "PYTHONVERBOSE");
     _Py_get_env_flag(use_env, &config->optimization_level, "PYTHONOPTIMIZE");
-    _Py_get_env_flag(use_env, &config->inspect, "PYTHONINSPECT");
+    if (!config->inspect && _Py_GetEnv(use_env, "PYTHONINSPECT")) {
+        config->inspect = 1;
+    }
 
     int dont_write_bytecode = 0;
     _Py_get_env_flag(use_env, &dont_write_bytecode, "PYTHONDONTWRITEBYTECODE");
@@ -2401,7 +2407,7 @@ config_usage(int error, const wchar_t* program)
 static void
 config_envvars_usage(void)
 {
-    printf(usage_envvars, (wint_t)DELIM, (wint_t)DELIM, PYTHONHOMEHELP);
+    printf(usage_envvars, (wint_t)DELIM, PYTHONHOMEHELP, (wint_t)DELIM);
 }
 
 static void
@@ -3214,10 +3220,13 @@ _Py_DumpPathConfig(PyThreadState *tstate)
 
 #define DUMP_SYS(NAME) \
         do { \
-            obj = PySys_GetObject(#NAME); \
             PySys_FormatStderr("  sys.%s = ", #NAME); \
+            if (_PySys_GetOptionalAttrString(#NAME, &obj) < 0) { \
+                PyErr_Clear(); \
+            } \
             if (obj != NULL) { \
                 PySys_FormatStderr("%A", obj); \
+                Py_DECREF(obj); \
             } \
             else { \
                 PySys_WriteStderr("(not set)"); \
@@ -3235,7 +3244,8 @@ _Py_DumpPathConfig(PyThreadState *tstate)
     DUMP_SYS(exec_prefix);
 #undef DUMP_SYS
 
-    PyObject *sys_path = PySys_GetObject("path");  /* borrowed reference */
+    PyObject *sys_path;
+    (void) _PySys_GetOptionalAttrString("path", &sys_path);
     if (sys_path != NULL && PyList_Check(sys_path)) {
         PySys_WriteStderr("  sys.path = [\n");
         Py_ssize_t len = PyList_GET_SIZE(sys_path);
@@ -3245,6 +3255,7 @@ _Py_DumpPathConfig(PyThreadState *tstate)
         }
         PySys_WriteStderr("  ]\n");
     }
+    Py_XDECREF(sys_path);
 
     _PyErr_SetRaisedException(tstate, exc);
 }

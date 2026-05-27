@@ -252,12 +252,32 @@ PyImport_GetModule(PyObject *name)
     mod = import_get_module(tstate, name);
     if (mod != NULL && mod != Py_None) {
         if (import_ensure_initialized(tstate->interp, mod, name) < 0) {
+            goto error;
+        }
+        /* Verify the module is still in sys.modules. Another thread may have
+           removed it (due to import failure) between our import_get_module()
+           call and the _initializing check in import_ensure_initialized(). */
+        PyObject *mod_check = import_get_module(tstate, name);
+        if (mod_check != mod) {
+            Py_XDECREF(mod_check);
+            if (_PyErr_Occurred(tstate)) {
+                goto error;
+            }
+            /* The module was removed or replaced. Return NULL to report
+               "not found" rather than trying to keep up with racing
+               modifications to sys.modules; returning the new value would
+               require looping to redo the ensure_initialized check. */
             Py_DECREF(mod);
-            remove_importlib_frames(tstate);
             return NULL;
         }
+        Py_DECREF(mod_check);
     }
     return mod;
+
+error:
+    Py_DECREF(mod);
+    remove_importlib_frames(tstate);
+    return NULL;
 }
 
 /* Get the module object corresponding to a module name.
@@ -747,7 +767,7 @@ const char *
 _PyImport_ResolveNameWithPackageContext(const char *name)
 {
 #ifndef HAVE_THREAD_LOCAL
-    PyThread_acquire_lock(EXTENSIONS.mutex, WAIT_LOCK);
+    PyMutex_Lock(&EXTENSIONS.mutex);
 #endif
     if (PKGCONTEXT != NULL) {
         const char *p = strrchr(PKGCONTEXT, '.');
@@ -757,7 +777,7 @@ _PyImport_ResolveNameWithPackageContext(const char *name)
         }
     }
 #ifndef HAVE_THREAD_LOCAL
-    PyThread_release_lock(EXTENSIONS.mutex);
+    PyMutex_Unlock(&EXTENSIONS.mutex);
 #endif
     return name;
 }
@@ -766,12 +786,12 @@ const char *
 _PyImport_SwapPackageContext(const char *newcontext)
 {
 #ifndef HAVE_THREAD_LOCAL
-    PyThread_acquire_lock(EXTENSIONS.mutex, WAIT_LOCK);
+    PyMutex_Lock(&EXTENSIONS.mutex);
 #endif
     const char *oldcontext = PKGCONTEXT;
     PKGCONTEXT = newcontext;
 #ifndef HAVE_THREAD_LOCAL
-    PyThread_release_lock(EXTENSIONS.mutex);
+    PyMutex_Unlock(&EXTENSIONS.mutex);
 #endif
     return oldcontext;
 }
@@ -2069,13 +2089,29 @@ import_run_extension(PyThreadState *tstate, PyModInitFunction p0,
     }
 
 main_finally:
+    if (rc < 0) {
+        _Py_ext_module_loader_result_apply_error(&res, name_buf);
+    }
+
     /* Switch back to the subinterpreter. */
     if (switched) {
+        // gh-144601: The exception object can't be transferred across
+        // interpreters. Instead, we print out an unraisable exception, and
+        // then raise a different exception for the calling interpreter.
+        if (rc < 0) {
+            assert(PyErr_Occurred());
+            PyErr_FormatUnraisable("Exception while importing from subinterpreter");
+        }
         assert(main_tstate != tstate);
         switch_back_from_main_interpreter(tstate, main_tstate, mod);
         /* Any module we got from the init function will have to be
          * reloaded in the subinterpreter. */
         mod = NULL;
+        if (rc < 0) {
+            PyErr_SetString(PyExc_ImportError,
+                            "failed to import from subinterpreter due to exception");
+            goto error;
+        }
     }
 
     /*****************************************************************/
@@ -2084,7 +2120,6 @@ main_finally:
 
     /* Finally we handle the error return from _PyImport_RunModInitFunc(). */
     if (rc < 0) {
-        _Py_ext_module_loader_result_apply_error(&res, name_buf);
         goto error;
     }
 
@@ -3341,19 +3376,15 @@ PyObject *
 PyImport_GetImporter(PyObject *path)
 {
     PyThreadState *tstate = _PyThreadState_GET();
-    PyObject *path_importer_cache = PySys_GetObject("path_importer_cache");
+    PyObject *path_importer_cache = _PySys_GetRequiredAttrString("path_importer_cache");
     if (path_importer_cache == NULL) {
-        PyErr_SetString(PyExc_RuntimeError, "lost sys.path_importer_cache");
         return NULL;
     }
-    Py_INCREF(path_importer_cache);
-    PyObject *path_hooks = PySys_GetObject("path_hooks");
+    PyObject *path_hooks = _PySys_GetRequiredAttrString("path_hooks");
     if (path_hooks == NULL) {
-        PyErr_SetString(PyExc_RuntimeError, "lost sys.path_hooks");
         Py_DECREF(path_importer_cache);
         return NULL;
     }
-    Py_INCREF(path_hooks);
     PyObject *importer = get_path_importer(tstate, path_importer_cache, path_hooks, path);
     Py_DECREF(path_hooks);
     Py_DECREF(path_importer_cache);
@@ -3655,15 +3686,31 @@ import_find_and_load(PyThreadState *tstate, PyObject *abs_name)
 
     PyTime_t t1 = 0, accumulated_copy = accumulated;
 
-    PyObject *sys_path = PySys_GetObject("path");
-    PyObject *sys_meta_path = PySys_GetObject("meta_path");
-    PyObject *sys_path_hooks = PySys_GetObject("path_hooks");
+    PyObject *sys_path, *sys_meta_path, *sys_path_hooks;
+    if (_PySys_GetOptionalAttrString("path", &sys_path) < 0) {
+        return NULL;
+    }
+    if (_PySys_GetOptionalAttrString("meta_path", &sys_meta_path) < 0) {
+        Py_XDECREF(sys_path);
+        return NULL;
+    }
+    if (_PySys_GetOptionalAttrString("path_hooks", &sys_path_hooks) < 0) {
+        Py_XDECREF(sys_meta_path);
+        Py_XDECREF(sys_path);
+        return NULL;
+    }
     if (_PySys_Audit(tstate, "import", "OOOOO",
                      abs_name, Py_None, sys_path ? sys_path : Py_None,
                      sys_meta_path ? sys_meta_path : Py_None,
                      sys_path_hooks ? sys_path_hooks : Py_None) < 0) {
+        Py_XDECREF(sys_path_hooks);
+        Py_XDECREF(sys_meta_path);
+        Py_XDECREF(sys_path);
         return NULL;
     }
+    Py_XDECREF(sys_path_hooks);
+    Py_XDECREF(sys_meta_path);
+    Py_XDECREF(sys_path);
 
 
     /* XOptions is initialized after first some imports.
@@ -3768,6 +3815,27 @@ PyImport_ImportModuleLevelObject(PyObject *name, PyObject *globals,
         if (import_ensure_initialized(tstate->interp, mod, abs_name) < 0) {
             goto error;
         }
+        /* Verify the module is still in sys.modules. Another thread may have
+           removed it (due to import failure) between our import_get_module()
+           call and the _initializing check in import_ensure_initialized().
+           If removed, we retry the import to preserve normal semantics: the
+           caller gets the exception from the actual import failure rather
+           than a synthetic error. */
+        PyObject *mod_check = import_get_module(tstate, abs_name);
+        if (mod_check != mod) {
+            Py_XDECREF(mod_check);
+            if (_PyErr_Occurred(tstate)) {
+                goto error;
+            }
+            Py_DECREF(mod);
+            mod = import_find_and_load(tstate, abs_name);
+            if (mod == NULL) {
+                goto error;
+            }
+        }
+        else {
+            Py_DECREF(mod_check);
+        }
     }
     else {
         Py_XDECREF(mod);
@@ -3818,15 +3886,17 @@ PyImport_ImportModuleLevelObject(PyObject *name, PyObject *globals,
                 }
 
                 final_mod = import_get_module(tstate, to_return);
-                Py_DECREF(to_return);
                 if (final_mod == NULL) {
                     if (!_PyErr_Occurred(tstate)) {
                         _PyErr_Format(tstate, PyExc_KeyError,
                                       "%R not in sys.modules as expected",
                                       to_return);
                     }
+                    Py_DECREF(to_return);
                     goto error;
                 }
+
+                Py_DECREF(to_return);
             }
         }
         else {
@@ -4111,10 +4181,8 @@ _PyImport_FiniCore(PyInterpreterState *interp)
 static int
 init_zipimport(PyThreadState *tstate, int verbose)
 {
-    PyObject *path_hooks = PySys_GetObject("path_hooks");
+    PyObject *path_hooks = _PySys_GetRequiredAttrString("path_hooks");
     if (path_hooks == NULL) {
-        _PyErr_SetString(tstate, PyExc_RuntimeError,
-                         "unable to get sys.path_hooks");
         return -1;
     }
 
@@ -4134,12 +4202,14 @@ init_zipimport(PyThreadState *tstate, int verbose)
         int err = PyList_Insert(path_hooks, 0, zipimporter);
         Py_DECREF(zipimporter);
         if (err < 0) {
+            Py_DECREF(path_hooks);
             return -1;
         }
         if (verbose) {
             PySys_WriteStderr("# installed zipimport hook\n");
         }
     }
+    Py_DECREF(path_hooks);
 
     return 0;
 }
@@ -4655,6 +4725,7 @@ static PyObject *
 _imp_create_dynamic_impl(PyObject *module, PyObject *spec, PyObject *file)
 /*[clinic end generated code: output=83249b827a4fde77 input=c31b954f4cf4e09d]*/
 {
+    FILE *fp = NULL;
     PyObject *mod = NULL;
     PyThreadState *tstate = _PyThreadState_GET();
 
@@ -4697,15 +4768,11 @@ _imp_create_dynamic_impl(PyObject *module, PyObject *spec, PyObject *file)
     /* We would move this (and the fclose() below) into
      * _PyImport_GetModInitFunc(), but it isn't clear if the intervening
      * code relies on fp still being open. */
-    FILE *fp;
     if (file != NULL) {
         fp = _Py_fopen_obj(info.filename, "r");
         if (fp == NULL) {
             goto finally;
         }
-    }
-    else {
-        fp = NULL;
     }
 
     PyModInitFunction p0 = _PyImport_GetModInitFunc(&info, fp);
@@ -4730,12 +4797,10 @@ _imp_create_dynamic_impl(PyObject *module, PyObject *spec, PyObject *file)
     }
 #endif
 
-    // XXX Shouldn't this happen in the error cases too (i.e. in "finally")?
-    if (fp) {
+finally:
+    if (fp != NULL) {
         fclose(fp);
     }
-
-finally:
     _Py_ext_module_loader_info_clear(&info);
     return mod;
 }

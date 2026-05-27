@@ -230,6 +230,26 @@ class EmbeddingTests(EmbeddingTestsMixin, unittest.TestCase):
         lines = "\n".join(lines) + "\n"
         self.assertEqual(out, lines)
 
+    def test_inittab_submodule_multiphase(self):
+        out, err = self.run_embedded_interpreter("test_inittab_submodule_multiphase")
+        self.assertEqual(err, "")
+        self.assertEqual(out,
+                         "<module 'mp_pkg.mp_submod' (built-in)>\n"
+                         "<module 'mp_pkg.mp_submod' (built-in)>\n"
+                         "Hello from sub-module\n"
+                         "mp_pkg.mp_submod.mp_submod_exec_slot_ran='yes'\n"
+                         "mp_pkg.mp_pkg_exec_slot_ran='yes'\n"
+                         )
+
+    def test_inittab_submodule_singlephase(self):
+        out, err = self.run_embedded_interpreter("test_inittab_submodule_singlephase")
+        self.assertEqual(self._nogil_filtered_err(err, "sp_pkg"), "")
+        self.assertEqual(out,
+                         "<module 'sp_pkg.sp_submod' (built-in)>\n"
+                         "<module 'sp_pkg.sp_submod' (built-in)>\n"
+                         "Hello from sub-module\n"
+                         )
+
     def test_forced_io_encoding(self):
         # Checks forced configuration of embedded interpreter IO streams
         env = dict(os.environ, PYTHONIOENCODING="utf-8:surrogateescape")
@@ -491,6 +511,24 @@ class EmbeddingTests(EmbeddingTestsMixin, unittest.TestCase):
         """)
         out, err = self.run_embedded_interpreter("test_repeated_init_exec", code)
         self.assertEqual(out, '1\n2\n3\n' * INIT_LOOPS)
+
+    @staticmethod
+    def _nogil_filtered_err(err: str, mod_name: str) -> str:
+        if not support.Py_GIL_DISABLED:
+            return err
+
+        # the test imports a singlephase init extension, so it emits a warning
+        # under the free-threaded build
+        expected_runtime_warning = (
+            "RuntimeWarning: The global interpreter lock (GIL)"
+            f" has been enabled to load module '{mod_name}'"
+        )
+        filtered_err_lines = [
+            line
+            for line in err.strip().splitlines()
+            if expected_runtime_warning not in line
+        ]
+        return "\n".join(filtered_err_lines)
 
 
 @unittest.skipIf(_testinternalcapi is None, "requires _testinternalcapi")
@@ -1951,57 +1989,6 @@ class MiscTests(EmbeddingTestsMixin, unittest.TestCase):
         self.assertIn("10 times sub", out)
         self.assertIn("CPU seconds", out)
         self.assertIn("cmd", out)
-
-
-class StdPrinterTests(EmbeddingTestsMixin, unittest.TestCase):
-    # Test PyStdPrinter_Type which is used by _PySys_SetPreliminaryStderr():
-    #   "Set up a preliminary stderr printer until we have enough
-    #    infrastructure for the io module in place."
-
-    STDOUT_FD = 1
-
-    def create_printer(self, fd):
-        ctypes = import_helper.import_module('ctypes')
-        PyFile_NewStdPrinter = ctypes.pythonapi.PyFile_NewStdPrinter
-        PyFile_NewStdPrinter.argtypes = (ctypes.c_int,)
-        PyFile_NewStdPrinter.restype = ctypes.py_object
-        return PyFile_NewStdPrinter(fd)
-
-    def test_write(self):
-        message = "unicode:\xe9-\u20ac-\udc80!\n"
-
-        stdout_fd = self.STDOUT_FD
-        stdout_fd_copy = os.dup(stdout_fd)
-        self.addCleanup(os.close, stdout_fd_copy)
-
-        rfd, wfd = os.pipe()
-        self.addCleanup(os.close, rfd)
-        self.addCleanup(os.close, wfd)
-        try:
-            # PyFile_NewStdPrinter() only accepts fileno(stdout)
-            # or fileno(stderr) file descriptor.
-            os.dup2(wfd, stdout_fd)
-
-            printer = self.create_printer(stdout_fd)
-            printer.write(message)
-        finally:
-            os.dup2(stdout_fd_copy, stdout_fd)
-
-        data = os.read(rfd, 100)
-        self.assertEqual(data, message.encode('utf8', 'backslashreplace'))
-
-    def test_methods(self):
-        fd = self.STDOUT_FD
-        printer = self.create_printer(fd)
-        self.assertEqual(printer.fileno(), fd)
-        self.assertEqual(printer.isatty(), os.isatty(fd))
-        printer.flush()  # noop
-        printer.close()  # noop
-
-    def test_disallow_instantiation(self):
-        fd = self.STDOUT_FD
-        printer = self.create_printer(fd)
-        support.check_disallow_instantiation(self, type(printer))
 
 
 if __name__ == "__main__":

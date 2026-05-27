@@ -22,7 +22,7 @@ class int "PyObject *" "&PyLong_Type"
 
 #define medium_value(x) ((stwodigits)_PyLong_CompactValue(x))
 
-#define IS_SMALL_INT(ival) (-_PY_NSMALLNEGINTS <= (ival) && (ival) < _PY_NSMALLPOSINTS)
+#define IS_SMALL_INT(ival) _PY_IS_SMALL_INT(ival)
 #define IS_SMALL_UINT(ival) ((ival) < _PY_NSMALLPOSINTS)
 
 #define _MAX_STR_DIGITS_ERROR_FMT_TO_INT "Exceeds the limit (%d digits) for integer string conversion: value has %zd digits; use sys.set_int_max_str_digits() to increase the limit"
@@ -874,16 +874,9 @@ _PyLong_FromByteArray(const unsigned char* bytes, size_t n,
             ++numsignificantbytes;
     }
 
-    /* How many Python int digits do we need?  We have
-       8*numsignificantbytes bits, and each Python int digit has
-       PyLong_SHIFT bits, so it's the ceiling of the quotient. */
-    /* catch overflow before it happens */
-    if (numsignificantbytes > (PY_SSIZE_T_MAX - PyLong_SHIFT) / 8) {
-        PyErr_SetString(PyExc_OverflowError,
-                        "byte array too long to convert to int");
-        return NULL;
-    }
-    ndigits = (numsignificantbytes * 8 + PyLong_SHIFT - 1) / PyLong_SHIFT;
+    /* avoid integer overflow */
+    ndigits = numsignificantbytes / PyLong_SHIFT * 8
+        + (numsignificantbytes % PyLong_SHIFT * 8 + PyLong_SHIFT - 1) / PyLong_SHIFT;
     v = _PyLong_New(ndigits);
     if (v == NULL)
         return NULL;
@@ -1048,13 +1041,19 @@ _PyLong_AsByteArray(PyLongObject* v,
         *p = (unsigned char)(accum & 0xff);
         p += pincr;
     }
-    else if (j == n && n > 0 && is_signed) {
+    else if (j == n && is_signed) {
         /* The main loop filled the byte array exactly, so the code
            just above didn't get to ensure there's a sign bit, and the
            loop below wouldn't add one either.  Make sure a sign bit
            exists. */
-        unsigned char msb = *(p - pincr);
-        int sign_bit_set = msb >= 0x80;
+        int sign_bit_set;
+        if (n > 0) {
+            unsigned char msb = *(p - pincr);
+            sign_bit_set = msb >= 0x80;
+        }
+        else {
+            sign_bit_set = 0;
+        }
         assert(accumbits == 0);
         if (sign_bit_set == do_twos_comp)
             return 0;
@@ -3058,11 +3057,11 @@ PyLong_FromString(const char *str, char **pend, int base)
     }
 
     /* Set sign and normalize */
-    if (sign < 0) {
-        _PyLong_FlipSign(z);
-    }
     long_normalize(z);
     z = maybe_small_long(z);
+    if (sign < 0) {
+        _PyLong_Negate(&z);
+    }
 
     if (pend != NULL) {
         *pend = (char *)str;
@@ -3588,16 +3587,9 @@ long_dealloc(PyObject *self)
      * we accidentally decref small Ints out of existence. Instead,
      * since small Ints are immortal, re-set the reference count.
      */
-    PyLongObject *pylong = (PyLongObject*)self;
-    if (pylong && _PyLong_IsCompact(pylong)) {
-        stwodigits ival = medium_value(pylong);
-        if (IS_SMALL_INT(ival)) {
-            PyLongObject *small_pylong = (PyLongObject *)get_small_int((sdigit)ival);
-            if (pylong == small_pylong) {
-                _Py_SetImmortal(self);
-                return;
-            }
-        }
+    if (_PyLong_IsSmallInt((PyLongObject*)self)) {
+        _Py_SetImmortal(self);
+        return;
     }
     Py_TYPE(self)->tp_free(self);
 }
@@ -4325,10 +4317,10 @@ pylong_int_divmod(PyLongObject *v, PyLongObject *w,
     if (result == NULL) {
         return -1;
     }
-    if (!PyTuple_Check(result)) {
+    if (!PyTuple_Check(result) || PyTuple_GET_SIZE(result) != 2) {
         Py_DECREF(result);
         PyErr_SetString(PyExc_ValueError,
-                        "tuple is required from int_divmod()");
+                        "tuple of length 2 is required from int_divmod()");
         return -1;
     }
     PyObject *q = PyTuple_GET_ITEM(result, 0);

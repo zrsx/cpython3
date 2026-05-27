@@ -125,14 +125,14 @@ test_bswap(PyObject *self, PyObject *Py_UNUSED(args))
     uint16_t u16 = _Py_bswap16(UINT16_C(0x3412));
     if (u16 != UINT16_C(0x1234)) {
         PyErr_Format(PyExc_AssertionError,
-                     "_Py_bswap16(0x3412) returns %u", u16);
+                     "_Py_bswap16(0x3412) returns %d", u16);
         return NULL;
     }
 
     uint32_t u32 = _Py_bswap32(UINT32_C(0x78563412));
     if (u32 != UINT32_C(0x12345678)) {
         PyErr_Format(PyExc_AssertionError,
-                     "_Py_bswap32(0x78563412) returns %lu", u32);
+                     "_Py_bswap32(0x78563412) returns %u", u32);
         return NULL;
     }
 
@@ -446,7 +446,7 @@ test_edit_cost(PyObject *self, PyObject *Py_UNUSED(args))
 
 static int
 check_bytes_find(const char *haystack0, const char *needle0,
-                 int offset, Py_ssize_t expected)
+                 Py_ssize_t offset, Py_ssize_t expected)
 {
     Py_ssize_t len_haystack = strlen(haystack0);
     Py_ssize_t len_needle = strlen(needle0);
@@ -864,7 +864,7 @@ get_interp_settings(PyObject *self, PyObject *args)
     }
     else {
         PyErr_Format(PyExc_NotImplementedError,
-                     "%zd", interpid);
+                     "%d", interpid);
         return NULL;
     }
     assert(interp != NULL);
@@ -1233,39 +1233,6 @@ unicode_transformdecimalandspacetoascii(PyObject *self, PyObject *arg)
     }
     return _PyUnicode_TransformDecimalAndSpaceToASCII(arg);
 }
-
-
-struct atexit_data {
-    int called;
-};
-
-static void
-callback(void *data)
-{
-    ((struct atexit_data *)data)->called += 1;
-}
-
-static PyObject *
-test_atexit(PyObject *self, PyObject *Py_UNUSED(args))
-{
-    PyThreadState *oldts = PyThreadState_Swap(NULL);
-    PyThreadState *tstate = Py_NewInterpreter();
-
-    struct atexit_data data = {0};
-    int res = PyUnstable_AtExit(tstate->interp, callback, (void *)&data);
-    Py_EndInterpreter(tstate);
-    PyThreadState_Swap(oldts);
-    if (res < 0) {
-        return NULL;
-    }
-
-    if (data.called == 0) {
-        PyErr_SetString(PyExc_RuntimeError, "atexit callback not called");
-        return NULL;
-    }
-    Py_RETURN_NONE;
-}
-
 
 static PyObject *
 test_pyobject_is_freed(const char *test_name, PyObject *op)
@@ -2019,6 +1986,20 @@ gh_119213_getargs_impl(PyObject *module, PyObject *spam)
 }
 
 
+static PyObject *
+_pyerr_setkeyerror(PyObject *self, PyObject *arg)
+{
+    // Test that _PyErr_SetKeyError() overrides the current exception
+    // if an exception is set
+    PyErr_NoMemory();
+
+    _PyErr_SetKeyError(arg);
+
+    assert(PyErr_Occurred());
+    return NULL;
+}
+
+
 static PyMethodDef module_functions[] = {
     {"get_configs", get_configs, METH_NOARGS},
     {"get_recursion_depth", get_recursion_depth, METH_NOARGS},
@@ -2065,7 +2046,6 @@ static PyMethodDef module_functions[] = {
     {"_PyTraceMalloc_GetTraceback", tracemalloc_get_traceback, METH_VARARGS},
     {"test_tstate_capi", test_tstate_capi, METH_NOARGS, NULL},
     {"_PyUnicode_TransformDecimalAndSpaceToASCII", unicode_transformdecimalandspacetoascii, METH_O},
-    {"test_atexit", test_atexit, METH_NOARGS},
     {"check_pyobject_forbidden_bytes_is_freed",
                             check_pyobject_forbidden_bytes_is_freed, METH_NOARGS},
     {"check_pyobject_freed_is_freed", check_pyobject_freed_is_freed, METH_NOARGS},
@@ -2110,6 +2090,7 @@ static PyMethodDef module_functions[] = {
     {"uop_symbols_test", _Py_uop_symbols_test, METH_NOARGS},
 #endif
     GH_119213_GETARGS_METHODDEF
+    {"_pyerr_setkeyerror", _pyerr_setkeyerror, METH_O},
     {NULL, NULL} /* sentinel */
 };
 

@@ -24,8 +24,8 @@ between conformable Python objects and XML on the wire.
 .. warning::
 
    The :mod:`xmlrpc.client` module is not secure against maliciously
-   constructed data.  If you need to parse untrusted or unauthenticated data see
-   :ref:`xml-vulnerabilities`.
+   constructed data.  If you need to parse untrusted or unauthenticated data,
+   see :ref:`xml-security`.
 
 .. versionchanged:: 3.5
 
@@ -61,23 +61,23 @@ between conformable Python objects and XML on the wire.
    The *headers* parameter is an optional sequence of HTTP headers to send with
    each request, expressed as a sequence of 2-tuples representing the header
    name and value. (e.g. ``[('Header-Name', 'value')]``).
+   If an HTTPS URL is provided, *context* may be :class:`ssl.SSLContext`
+   and configures the SSL settings of the underlying HTTPS connection.
    The obsolete *use_datetime* flag is similar to *use_builtin_types* but it
    applies only to date/time values.
 
-.. versionchanged:: 3.3
-    The *use_builtin_types* flag was added.
+   .. versionchanged:: 3.3
+      The *use_builtin_types* flag was added.
 
-.. versionchanged:: 3.8
-    The *headers* parameter was added.
+   .. versionchanged:: 3.8
+      The *headers* parameter was added.
 
    Both the HTTP and HTTPS transports support the URL syntax extension for HTTP
    Basic Authentication: ``http://user:pass@host:port/path``.  The  ``user:pass``
    portion will be base64-encoded as an HTTP 'Authorization' header, and sent to
    the remote server as part of the connection process when invoking an XML-RPC
    method.  You only need to use this if the remote server requires a Basic
-   Authentication user and password. If an HTTPS URL is provided, *context* may
-   be :class:`ssl.SSLContext` and configures the SSL settings of the underlying
-   HTTPS connection.
+   Authentication user and password.
 
    The returned instance is a proxy object with methods that can be used to invoke
    corresponding RPC calls on the remote server.  If the remote server supports the
@@ -275,12 +275,12 @@ DateTime Objects
 
 A working example follows. The server code::
 
-   import datetime
+   import datetime as dt
    from xmlrpc.server import SimpleXMLRPCServer
    import xmlrpc.client
 
    def today():
-       today = datetime.datetime.today()
+       today = dt.datetime.today()
        return xmlrpc.client.DateTime(today)
 
    server = SimpleXMLRPCServer(("localhost", 8000))
@@ -291,14 +291,14 @@ A working example follows. The server code::
 The client code for the preceding server::
 
    import xmlrpc.client
-   import datetime
+   import datetime as dt
 
    proxy = xmlrpc.client.ServerProxy("http://localhost:8000/")
 
    today = proxy.today()
-   # convert the ISO8601 string to a datetime object
-   converted = datetime.datetime.strptime(today.value, "%Y%m%dT%H:%M:%S")
-   print("Today: %s" % converted.strftime("%d.%m.%Y, %H:%M"))
+   # convert the ISO 8601 string to a datetime object
+   converted = dt.datetime.strptime(today.value, "%Y%m%dT%H:%M:%S")
+   print(f"Today: {converted.strftime('%d.%m.%Y, %H:%M')}")
 
 .. _binary-objects:
 
@@ -524,7 +524,7 @@ Convenience Functions
 
 .. function:: dumps(params, methodname=None, methodresponse=None, encoding=None, allow_none=False)
 
-   Convert *params* into an XML-RPC request. or into a response if *methodresponse*
+   Convert *params* into an XML-RPC request, or into a response if *methodresponse*
    is true. *params* can be either a tuple of arguments or an instance of the
    :exc:`Fault` exception class.  If *methodresponse* is true, only a single value
    can be returned, meaning that *params* must be of length 1. *encoding*, if

@@ -19,11 +19,10 @@ not already proficient with the DOM should consider using the
 :mod:`xml.etree.ElementTree` module for their XML processing instead.
 
 
-.. warning::
+.. note::
 
-   The :mod:`xml.dom.minidom` module is not secure against
-   maliciously constructed data.  If you need to parse untrusted or
-   unauthenticated data see :ref:`xml-vulnerabilities`.
+   If you need to parse untrusted or unauthenticated data, see
+   :ref:`xml-security`.
 
 
 DOM applications typically start by parsing some XML into a DOM.  With
@@ -63,7 +62,7 @@ document.
 
 What the :func:`parse` and :func:`parseString` functions do is connect an XML
 parser with a "DOM builder" that can accept parse events from any SAX parser and
-convert them into a DOM tree.  The name of the functions are perhaps misleading,
+convert them into a DOM tree.  The names of the functions are perhaps misleading,
 but are easy to grasp when learning the interfaces.  The parsing of the document
 will be completed before these functions return; it's simply that these
 functions do not provide a parser implementation themselves.

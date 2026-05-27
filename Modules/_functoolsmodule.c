@@ -6,6 +6,7 @@
 #include "pycore_object.h"        // _PyObject_GC_TRACK
 #include "pycore_pystate.h"       // _PyThreadState_GET()
 #include "pycore_tuple.h"         // _PyTuple_ITEMS()
+#include "pycore_weakref.h"       // FT_CLEAR_WEAKREFS()
 
 
 #include "clinic/_functoolsmodule.c.h"
@@ -189,9 +190,7 @@ partial_dealloc(partialobject *pto)
     PyTypeObject *tp = Py_TYPE(pto);
     /* bpo-31095: UnTrack is needed before calling any callbacks */
     PyObject_GC_UnTrack(pto);
-    if (pto->weakreflist != NULL) {
-        PyObject_ClearWeakRefs((PyObject *) pto);
-    }
+    FT_CLEAR_WEAKREFS((PyObject*)pto, pto->weakreflist);
     (void)partial_clear(pto);
     tp->tp_free(pto);
     Py_DECREF(tp);
@@ -221,7 +220,9 @@ partial_vectorcall_fallback(PyThreadState *tstate, partialobject *pto,
                             PyObject *const *args, size_t nargsf,
                             PyObject *kwnames)
 {
+#ifndef Py_GIL_DISABLED
     pto->vectorcall = NULL;
+#endif
     Py_ssize_t nargs = PyVectorcall_NARGS(nargsf);
     return _PyObject_MakeTpCall(tstate, (PyObject *)pto,
                                 args, nargs, kwnames);
@@ -387,65 +388,72 @@ static PyObject *
 partial_repr(partialobject *pto)
 {
     PyObject *result = NULL;
-    PyObject *arglist;
-    PyObject *mod;
-    PyObject *name;
+    PyObject *arglist = NULL;
+    PyObject *mod = NULL;
+    PyObject *name = NULL;
     Py_ssize_t i, n;
     PyObject *key, *value;
     int status;
 
     status = Py_ReprEnter((PyObject *)pto);
     if (status != 0) {
-        if (status < 0)
+        if (status < 0) {
             return NULL;
+        }
         return PyUnicode_FromString("...");
     }
+    /* Reference arguments in case they change */
+    PyObject *fn = Py_NewRef(pto->fn);
+    PyObject *args = Py_NewRef(pto->args);
+    PyObject *kw = Py_NewRef(pto->kw);
+    assert(PyTuple_Check(args));
+    assert(PyDict_Check(kw));
 
     arglist = PyUnicode_FromString("");
-    if (arglist == NULL)
+    if (arglist == NULL) {
         goto done;
+    }
     /* Pack positional arguments */
-    assert (PyTuple_Check(pto->args));
-    n = PyTuple_GET_SIZE(pto->args);
+    n = PyTuple_GET_SIZE(args);
     for (i = 0; i < n; i++) {
         Py_SETREF(arglist, PyUnicode_FromFormat("%U, %R", arglist,
-                                        PyTuple_GET_ITEM(pto->args, i)));
-        if (arglist == NULL)
+                                        PyTuple_GET_ITEM(args, i)));
+        if (arglist == NULL) {
             goto done;
+        }
     }
     /* Pack keyword arguments */
-    assert (PyDict_Check(pto->kw));
-    for (i = 0; PyDict_Next(pto->kw, &i, &key, &value);) {
+    for (i = 0; PyDict_Next(kw, &i, &key, &value);) {
         /* Prevent key.__str__ from deleting the value. */
         Py_INCREF(value);
         Py_SETREF(arglist, PyUnicode_FromFormat("%U, %S=%R", arglist,
                                                 key, value));
         Py_DECREF(value);
-        if (arglist == NULL)
+        if (arglist == NULL) {
             goto done;
+        }
     }
 
     mod = PyType_GetModuleName(Py_TYPE(pto));
     if (mod == NULL) {
-        goto error;
+        goto done;
     }
+
     name = PyType_GetQualName(Py_TYPE(pto));
     if (name == NULL) {
-        Py_DECREF(mod);
-        goto error;
+        goto done;
     }
-    result = PyUnicode_FromFormat("%S.%S(%R%U)", mod, name, pto->fn, arglist);
-    Py_DECREF(mod);
-    Py_DECREF(name);
-    Py_DECREF(arglist);
 
- done:
+    result = PyUnicode_FromFormat("%S.%S(%R%U)", mod, name, fn, arglist);
+done:
+    Py_XDECREF(name);
+    Py_XDECREF(mod);
+    Py_XDECREF(arglist);
+    Py_DECREF(fn);
+    Py_DECREF(args);
+    Py_DECREF(kw);
     Py_ReprLeave((PyObject *)pto);
     return result;
- error:
-    Py_DECREF(arglist);
-    Py_ReprLeave((PyObject *)pto);
-    return NULL;
 }
 
 /* Pickle strategy:
@@ -472,7 +480,8 @@ partial_setstate(partialobject *pto, PyObject *state)
         !PyArg_ParseTuple(state, "OOOO", &fn, &fnargs, &kw, &dict) ||
         !PyCallable_Check(fn) ||
         !PyTuple_Check(fnargs) ||
-        (kw != Py_None && !PyDict_Check(kw)))
+        (kw != Py_None && !PyDict_Check(kw)) ||
+        (dict != Py_None && !PyDict_Check(dict)))
     {
         PyErr_SetString(PyExc_TypeError, "invalid partial state");
         return NULL;
@@ -1317,9 +1326,7 @@ lru_cache_dealloc(lru_cache_object *obj)
     PyTypeObject *tp = Py_TYPE(obj);
     /* bpo-31095: UnTrack is needed before calling any callbacks */
     PyObject_GC_UnTrack(obj);
-    if (obj->weakreflist != NULL) {
-        PyObject_ClearWeakRefs((PyObject*)obj);
-    }
+    FT_CLEAR_WEAKREFS((PyObject*)obj, obj->weakreflist);
 
     (void)lru_cache_tp_clear(obj);
     tp->tp_free(obj);

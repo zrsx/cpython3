@@ -89,15 +89,6 @@ elif sys.platform.startswith("aix"):
 
     from ctypes._aix import find_library
 
-elif sys.platform == "android":
-    def find_library(name):
-        directory = "/system/lib"
-        if "64" in os.uname().machine:
-            directory += "64"
-
-        fname = f"{directory}/lib{name}.so"
-        return fname if os.path.isfile(fname) else None
-
 elif os.name == "posix":
     # Andreas Degert's find functions, using gcc, /sbin/ldconfig, objdump
     import re, tempfile
@@ -184,7 +175,7 @@ elif os.name == "posix":
             # assuming GNU binutils / ELF
             if not f:
                 return None
-            objdump = shutil.which('objdump')
+            objdump = shutil.which('llvm-objdump')
             if not objdump:
                 # objdump is not available, give up
                 return None
@@ -221,7 +212,7 @@ elif os.name == "posix":
             expr = os.fsencode(expr)
 
             try:
-                proc = subprocess.Popen(('/sbin/ldconfig', '-r'),
+                proc = subprocess.Popen(('/data/data/com.termux/files/usr/bin/ldconfig', '-r'),
                                         stdout=subprocess.PIPE,
                                         stderr=subprocess.DEVNULL)
             except OSError:  # E.g. command not found
@@ -312,7 +303,7 @@ elif os.name == "posix":
         def _findLib_ld(name):
             # See issue #9998 for why this is needed
             expr = r'[^\(\)\s]*lib%s\.[^\(\)\s]*' % re.escape(name)
-            cmd = ['ld', '-t']
+            cmd = ['ld.lld', '-t']
             libpath = os.environ.get('LD_LIBRARY_PATH')
             if libpath:
                 for d in libpath.split(':'):

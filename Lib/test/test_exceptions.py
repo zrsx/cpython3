@@ -1465,6 +1465,7 @@ class ExceptionTests(unittest.TestCase):
 
     @cpython_only
     @unittest.skipIf(_testcapi is None, "requires _testcapi")
+    @force_not_colorized
     def test_recursion_normalizing_infinite_exception(self):
         # Issue #30697. Test that a RecursionError is raised when
         # maximum recursion depth has been exceeded when creating
@@ -1842,6 +1843,38 @@ class ExceptionTests(unittest.TestCase):
         rc, _, err = script_helper.assert_python_ok("-c", code)
         self.assertIn(b'MemoryError', err)
 
+    @cpython_only
+    # Python built with Py_TRACE_REFS fail with a fatal error in
+    # _PyRefchain_Trace() on memory allocation error.
+    @unittest.skipIf(support.Py_TRACE_REFS, 'cannot test Py_TRACE_REFS build')
+    def test_exec_set_nomemory_hang(self):
+        import_module("_testcapi")
+        # gh-134163: A MemoryError inside code that was wrapped by a try/except
+        # block would lead to an infinite loop.
+
+        # The frame_lasti needs to be greater than 257 to prevent
+        # PyLong_FromLong() from returning cached integers, which
+        # don't require a memory allocation. Prepend some dummy code
+        # to artificially increase the instruction index.
+        warmup_code = "a = list(range(0, 1))\n" * 20
+        user_input = warmup_code + dedent("""
+            try:
+                import _testcapi
+                _testcapi.set_nomemory(0)
+                b = list(range(1000, 2000))
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+            """)
+        with SuppressCrashReport():
+            with script_helper.spawn_python('-c', user_input) as p:
+                p.wait()
+                output = p.stdout.read()
+
+        self.assertIn(p.returncode, (0, 1))
+        self.assertGreater(len(output), 0)  # At minimum, should not hang
+        self.assertIn(b"MemoryError", output)
+
 
 class NameErrorTests(unittest.TestCase):
     def test_name_error_has_name(self):
@@ -2157,6 +2190,7 @@ class AssertionErrorTests(unittest.TestCase):
                 self.assertEqual(result[-len(expected):], expected)
 
 
+@support.force_not_colorized_test_class
 class SyntaxErrorTests(unittest.TestCase):
     maxDiff = None
 
@@ -2250,6 +2284,21 @@ class SyntaxErrorTests(unittest.TestCase):
                         sys.__excepthook__(*sys.exc_info())
                     self.assertIn(expected, err.getvalue())
                     the_exception = exc
+
+    def test_subclass(self):
+        class MySyntaxError(SyntaxError):
+            pass
+
+        try:
+            raise MySyntaxError("bad bad", ("bad.py", 1, 2, "abcdefg", 1, 7))
+        except SyntaxError as exc:
+            with support.captured_stderr() as err:
+                sys.__excepthook__(*sys.exc_info())
+            self.assertIn("""
+  File "bad.py", line 1
+    abcdefg
+     ^^^^^
+""", err.getvalue())
 
     def test_encodings(self):
         self.addCleanup(unlink, TESTFN)
@@ -2386,6 +2435,30 @@ class SyntaxErrorTests(unittest.TestCase):
 
         args = ("bad.py", 1, 2, "abcdefg", 1)
         self.assertRaises(TypeError, SyntaxError, "bad bad", args)
+
+    def test_syntax_error_memory_leak(self):
+        # gh-146250: memory leak with re-initialization of SyntaxError
+        e = SyntaxError("msg", ("file.py", 1, 2, "txt", 2, 3))
+        e.__init__("new_msg", ("new_file.py", 2, 3, "new_txt", 3, 4))
+        self.assertEqual(e.msg, "new_msg")
+        self.assertEqual(e.args, ("new_msg", ("new_file.py", 2, 3, "new_txt", 3, 4)))
+        self.assertEqual(e.filename, "new_file.py")
+        self.assertEqual(e.lineno, 2)
+        self.assertEqual(e.offset, 3)
+        self.assertEqual(e.text, "new_txt")
+        self.assertEqual(e.end_lineno, 3)
+        self.assertEqual(e.end_offset, 4)
+
+        e = SyntaxError("msg", ("file.py", 1, 2, "txt", 2, 3))
+        e.__init__("new_msg", ("new_file.py", 2, 3, "new_txt"))
+        self.assertEqual(e.msg, "new_msg")
+        self.assertEqual(e.args, ("new_msg", ("new_file.py", 2, 3, "new_txt")))
+        self.assertEqual(e.filename, "new_file.py")
+        self.assertEqual(e.lineno, 2)
+        self.assertEqual(e.offset, 3)
+        self.assertEqual(e.text, "new_txt")
+        self.assertIsNone(e.end_lineno)
+        self.assertIsNone(e.end_offset)
 
 
 class TestInvalidExceptionMatcher(unittest.TestCase):

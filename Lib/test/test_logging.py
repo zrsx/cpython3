@@ -24,6 +24,7 @@ import logging.config
 
 import codecs
 import configparser
+import contextlib
 import copy
 import datetime
 import pathlib
@@ -51,6 +52,7 @@ from test.support import warnings_helper
 from test.support import asyncore
 from test.support import smtpd
 from test.support.logging_helper import TestHandler
+from test.support.testcase import ExtraAssertions
 import textwrap
 import threading
 import asyncio
@@ -4300,8 +4302,6 @@ class QueueHandlerTest(BaseTest):
         self.assertEqual(formatted_msg, log_record.msg)
         self.assertEqual(formatted_msg, log_record.message)
 
-    @unittest.skipUnless(hasattr(logging.handlers, 'QueueListener'),
-                         'logging.handlers.QueueListener required for this test')
     def test_queue_listener(self):
         handler = TestHandler(support.Matcher())
         listener = logging.handlers.QueueListener(self.queue, handler)
@@ -4336,8 +4336,18 @@ class QueueHandlerTest(BaseTest):
         self.assertTrue(handler.matches(levelno=logging.CRITICAL, message='6'))
         handler.close()
 
-    @unittest.skipUnless(hasattr(logging.handlers, 'QueueListener'),
-                         'logging.handlers.QueueListener required for this test')
+        # doesn't hurt to call stop() more than once.
+        listener.stop()
+        self.assertIsNone(listener._thread)
+
+    def test_queue_listener_multi_start(self):
+        handler = TestHandler(support.Matcher())
+        listener = logging.handlers.QueueListener(self.queue, handler)
+        listener.start()
+        self.assertRaises(RuntimeError, listener.start)
+        listener.stop()
+        self.assertIsNone(listener._thread)
+
     def test_queue_listener_with_StreamHandler(self):
         # Test that traceback and stack-info only appends once (bpo-34334, bpo-46755).
         listener = logging.handlers.QueueListener(self.queue, self.root_hdlr)
@@ -4352,8 +4362,6 @@ class QueueHandlerTest(BaseTest):
         self.assertEqual(self.stream.getvalue().strip().count('Traceback'), 1)
         self.assertEqual(self.stream.getvalue().strip().count('Stack'), 1)
 
-    @unittest.skipUnless(hasattr(logging.handlers, 'QueueListener'),
-                         'logging.handlers.QueueListener required for this test')
     def test_queue_listener_with_multiple_handlers(self):
         # Test that queue handler format doesn't affect other handler formats (bpo-35726).
         self.que_hdlr.setFormatter(self.root_formatter)
@@ -5717,7 +5725,7 @@ class BasicConfigTest(unittest.TestCase):
         self._test_log('critical')
 
 
-class LoggerAdapterTest(unittest.TestCase):
+class LoggerAdapterTest(unittest.TestCase, ExtraAssertions):
     def setUp(self):
         super(LoggerAdapterTest, self).setUp()
         old_handler_list = logging._handlerList[:]
@@ -5733,7 +5741,7 @@ class LoggerAdapterTest(unittest.TestCase):
 
         self.addCleanup(cleanup)
         self.addCleanup(logging.shutdown)
-        self.adapter = logging.LoggerAdapter(logger=self.logger, extra=None)
+        self.adapter = logging.LoggerAdapter(logger=self.logger)
 
     def test_exception(self):
         msg = 'testing exception: %r'
@@ -5904,6 +5912,18 @@ class LoggerAdapterTest(unittest.TestCase):
         self.assertEqual(record.foo, '1')
         self.assertEqual(record.bar, '2')
 
+        self.adapter.critical('no extra')  # should not fail
+        self.assertEqual(len(self.recording.records), 2)
+        record = self.recording.records[-1]
+        self.assertEqual(record.foo, '1')
+        self.assertNotHasAttr(record, 'bar')
+
+        self.adapter.critical('none extra', extra=None)  # should not fail
+        self.assertEqual(len(self.recording.records), 3)
+        record = self.recording.records[-1]
+        self.assertEqual(record.foo, '1')
+        self.assertNotHasAttr(record, 'bar')
+
     def test_extra_merged_log_call_has_precedence(self):
         self.adapter = logging.LoggerAdapter(logger=self.logger,
                                              extra={'foo': '1'},
@@ -5914,6 +5934,25 @@ class LoggerAdapterTest(unittest.TestCase):
         record = self.recording.records[0]
         self.assertTrue(hasattr(record, 'foo'))
         self.assertEqual(record.foo, '2')
+
+    def test_extra_merged_without_extra(self):
+        self.adapter = logging.LoggerAdapter(logger=self.logger,
+                                             merge_extra=True)
+
+        self.adapter.critical('foo should be here', extra={'foo': '1'})
+        self.assertEqual(len(self.recording.records), 1)
+        record = self.recording.records[-1]
+        self.assertEqual(record.foo, '1')
+
+        self.adapter.critical('no extra')  # should not fail
+        self.assertEqual(len(self.recording.records), 2)
+        record = self.recording.records[-1]
+        self.assertNotHasAttr(record, 'foo')
+
+        self.adapter.critical('none extra', extra=None)  # should not fail
+        self.assertEqual(len(self.recording.records), 3)
+        record = self.recording.records[-1]
+        self.assertNotHasAttr(record, 'foo')
 
 
 class PrefixAdapter(logging.LoggerAdapter):
@@ -6244,6 +6283,32 @@ class RotatingFileHandlerTest(BaseFileTest):
                 os.devnull, encoding="utf-8", maxBytes=1)
         self.assertFalse(rh.shouldRollover(self.next_rec()))
         rh.close()
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), 'requires os.mkfifo()')
+    def test_should_not_rollover_named_pipe(self):
+        # gh-143237 - test with non-seekable special file (named pipe)
+        filename = os_helper.TESTFN
+        self.addCleanup(os_helper.unlink, filename)
+        try:
+            os.mkfifo(filename)
+        except PermissionError as e:
+            self.skipTest('os.mkfifo(): %s' % e)
+
+        data = 'not read'
+        def other_side():
+            nonlocal data
+            with open(filename, 'rb') as f:
+                data = f.read()
+
+        thread = threading.Thread(target=other_side)
+        with threading_helper.start_threads([thread]):
+            rh = logging.handlers.RotatingFileHandler(
+                    filename, encoding="utf-8", maxBytes=1)
+            with contextlib.closing(rh):
+                m = self.next_rec()
+                self.assertFalse(rh.shouldRollover(m))
+                rh.emit(m)
+        self.assertEqual(data.decode(), m.msg + os.linesep)
 
     def test_should_rollover(self):
         with open(self.fn, 'wb') as f:

@@ -21,7 +21,9 @@ Glossary
         right delimiters (parentheses, square brackets, curly braces or triple
         quotes), or after specifying a decorator.
 
-      * The :const:`Ellipsis` built-in constant.
+      .. index:: single: ...; ellipsis literal
+
+      * The three dots form of the :ref:`Ellipsis <bltin-ellipsis-object>` object.
 
    abstract base class
       Abstract base classes complement :term:`duck-typing` by
@@ -102,7 +104,7 @@ Glossary
       statements.
 
    asynchronous generator iterator
-      An object created by a :term:`asynchronous generator` function.
+      An object created by an :term:`asynchronous generator` function.
 
       This is an :term:`asynchronous iterator` which when called using the
       :meth:`~object.__anext__` method returns an awaitable object which will execute
@@ -110,7 +112,7 @@ Glossary
       :keyword:`yield` expression.
 
       Each :keyword:`yield` temporarily suspends processing, remembering the
-      location execution state (including local variables and pending
+      execution state (including local variables and pending
       try-statements).  When the *asynchronous generator iterator* effectively
       resumes with another awaitable returned by :meth:`~object.__anext__`, it
       picks up where it left off.  See :pep:`492` and :pep:`525`.
@@ -126,6 +128,14 @@ Glossary
       :keyword:`async for` resolves the awaitables returned by an asynchronous
       iterator's :meth:`~object.__anext__` method until it raises a
       :exc:`StopAsyncIteration` exception.  Introduced by :pep:`492`.
+
+   atomic operation
+      An operation that appears to execute as a single, indivisible step: no
+      other thread can observe it half-done, and its effects become visible all
+      at once.  Python does not guarantee that high-level statements are atomic
+      (for example, ``x += 1`` performs multiple bytecode operations and is not
+      atomic).  Atomicity is only guaranteed where explicitly documented.  See
+      also :term:`race condition` and :term:`data race`.
 
    attribute
       A value associated with an object which is usually referenced by name
@@ -260,6 +270,22 @@ Glossary
       advanced mathematical feature.  If you're not aware of a need for them,
       it's almost certain you can safely ignore them.
 
+   concurrency
+      The ability of a computer program to perform multiple tasks at the same
+      time.  Python provides libraries for writing programs that make use of
+      different forms of concurrency.  :mod:`asyncio` is a library for dealing
+      with asynchronous tasks and coroutines.  :mod:`threading` provides
+      access to operating system threads and :mod:`multiprocessing` to
+      operating system processes. Multi-core processors can execute threads and
+      processes on different CPU cores at the same time (see
+      :term:`parallelism`).
+
+   concurrent modification
+      When multiple threads modify shared data at the same time.  Concurrent
+      modification without proper synchronization can cause
+      :term:`race conditions <race condition>`, and might also trigger a
+      :term:`data race <data race>`, data corruption, or both.
+
    context
       This term has different meanings depending on where and how it is used.
       Some common meanings:
@@ -327,6 +353,28 @@ Glossary
       thread has its own current context.  Frameworks for executing asynchronous
       tasks (see :mod:`asyncio`) associate each task with a context which
       becomes the current context whenever the task starts or resumes execution.
+
+   data race
+      A situation where multiple threads access the same memory location
+      concurrently, at least one of the accesses is a write, and the threads
+      do not use any synchronization to control their access.  Data races
+      lead to :term:`non-deterministic` behavior and can cause data corruption.
+      Proper use of :term:`locks <lock>` and other :term:`synchronization primitives
+      <synchronization primitive>` prevents data races.  Note that data races
+      can only happen in native code, but that :term:`native code` might be
+      exposed in a Python API.  See also :term:`race condition` and
+      :term:`thread-safe`.
+
+   deadlock
+      A situation in which two or more tasks (threads, processes, or coroutines)
+      wait indefinitely for each other to release resources or complete actions,
+      preventing any from making progress.  For example, if thread A holds lock
+      1 and waits for lock 2, while thread B holds lock 2 and waits for lock 1,
+      both threads will wait indefinitely.  In Python this often arises from
+      acquiring multiple locks in conflicting orders or from circular
+      join/await dependencies.  Deadlocks can be avoided by always acquiring
+      multiple :term:`locks <lock>` in a consistent order.  See also
+      :term:`lock` and :term:`reentrant`.
 
    decorator
       A function returning another function, usually applied as a function
@@ -401,6 +449,11 @@ Glossary
       :func:`isinstance`.  (Note, however, that duck-typing can be complemented
       with :term:`abstract base classes <abstract base class>`.)  Instead, it
       typically employs :func:`hasattr` tests or :term:`EAFP` programming.
+
+   dunder
+      An informal short-hand for "double underscore", used when talking about a
+      :term:`special method`. For example, ``__init__`` is often pronounced
+      "dunder init".
 
    EAFP
       Easier to ask for forgiveness than permission.  This common Python coding
@@ -554,7 +607,7 @@ Glossary
       An object created by a :term:`generator` function.
 
       Each :keyword:`yield` temporarily suspends processing, remembering the
-      location execution state (including local variables and pending
+      execution state (including local variables and pending
       try-statements).  When the *generator iterator* resumes, it picks up where
       it left off (in contrast to functions which start fresh on every
       invocation).
@@ -612,6 +665,14 @@ Glossary
       multi-threaded applications and makes it easier to use multi-core CPUs
       efficiently. For more details, see :pep:`703`.
 
+   global state
+      Data that is accessible throughout a program, such as module-level
+      variables, class variables, or C static variables in :term:`extension modules
+      <extension module>`.  In multi-threaded programs, global state shared
+      between threads typically requires synchronization to avoid
+      :term:`race conditions <race condition>` and
+      :term:`data races <data race>`.
+
    hash-based pyc
       A bytecode cache file that uses the hash rather than the last-modified
       time of the corresponding source file to determine its validity. See
@@ -653,7 +714,9 @@ Glossary
       tuples.  Such an object cannot be altered.  A new object has to
       be created if a different value has to be stored.  They play an important
       role in places where a constant hash value is needed, for example as a key
-      in a dictionary.
+      in a dictionary.  Immutable objects are inherently :term:`thread-safe`
+      because their state cannot be modified after creation, eliminating concerns
+      about improperly synchronized :term:`concurrent modification`.
 
    import path
       A list of locations (or :term:`path entries <path entry>`) that are
@@ -706,7 +769,7 @@ Glossary
       iterables include all sequence types (such as :class:`list`, :class:`str`,
       and :class:`tuple`) and some non-sequence types like :class:`dict`,
       :term:`file objects <file object>`, and objects of any classes you define
-      with an :meth:`~iterator.__iter__` method or with a
+      with an :meth:`~object.__iter__` method or with a
       :meth:`~object.__getitem__` method
       that implements :term:`sequence` semantics.
 
@@ -743,8 +806,9 @@ Glossary
 
          CPython does not consistently apply the requirement that an iterator
          define :meth:`~iterator.__iter__`.
-         And also please note that the free-threading CPython does not guarantee
-         the thread-safety of iterator operations.
+         And also please note that :term:`free-threaded <free threading>`
+         CPython does not guarantee :term:`thread-safe` behavior of iterator
+         operations.
 
 
    key function
@@ -760,7 +824,7 @@ Glossary
       :func:`itertools.groupby`.
 
       There are several ways to create a key function.  For example. the
-      :meth:`str.lower` method can serve as a key function for case insensitive
+      :meth:`str.casefold` method can serve as a key function for case insensitive
       sorts.  Alternatively, a key function can be built from a
       :keyword:`lambda` expression such as ``lambda r: (r[0], r[2])``.  Also,
       :func:`operator.attrgetter`, :func:`operator.itemgetter`, and
@@ -782,10 +846,15 @@ Glossary
       :keyword:`if` statements.
 
       In a multi-threaded environment, the LBYL approach can risk introducing a
-      race condition between "the looking" and "the leaping".  For example, the
-      code, ``if key in mapping: return mapping[key]`` can fail if another
+      :term:`race condition` between "the looking" and "the leaping".  For example,
+      the code, ``if key in mapping: return mapping[key]`` can fail if another
       thread removes *key* from *mapping* after the test, but before the lookup.
-      This issue can be solved with locks or by using the EAFP approach.
+      This issue can be solved with :term:`locks <lock>` or by using the
+      :term:`EAFP` approach.  See also :term:`thread-safe`.
+
+   lexical analyzer
+
+      Formal name for the *tokenizer*; see :term:`token`.
 
    list
       A built-in Python :term:`sequence`.  Despite its name it is more akin
@@ -800,10 +869,35 @@ Glossary
       clause is optional.  If omitted, all elements in ``range(256)`` are
       processed.
 
+   lock
+      A :term:`synchronization primitive` that allows only one thread at a
+      time to access a shared resource.  A thread must acquire a lock before
+      accessing the protected resource and release it afterward.  If a thread
+      attempts to acquire a lock that is already held by another thread, it
+      will block until the lock becomes available.  Python's :mod:`threading`
+      module provides :class:`~threading.Lock` (a basic lock) and
+      :class:`~threading.RLock` (a :term:`reentrant` lock).  Locks are used
+      to prevent :term:`race conditions <race condition>` and ensure
+      :term:`thread-safe` access to shared data.  Alternative design patterns
+      to locks exist such as queues, producer/consumer patterns, and
+      thread-local state. See also :term:`deadlock`, and :term:`reentrant`.
+
+   lock-free
+      An operation that does not acquire any :term:`lock` and uses atomic CPU
+      instructions to ensure correctness. Lock-free operations can execute
+      concurrently without blocking each other and cannot be blocked by
+      operations that hold locks. In :term:`free-threaded <free threading>`
+      Python, built-in types like :class:`dict` and :class:`list` provide
+      lock-free read operations, which means other threads may observe
+      intermediate states during multi-step modifications even when those
+      modifications hold the :term:`per-object lock`.
+
    loader
-      An object that loads a module. It must define a method named
-      :meth:`load_module`. A loader is typically returned by a
-      :term:`finder`. See also:
+      An object that loads a module.
+      It must define the :meth:`!exec_module` and :meth:`!create_module` methods
+      to implement the :class:`~importlib.abc.Loader` interface.
+      A loader is typically returned by a :term:`finder`.
+      See also:
 
       * :ref:`finders-and-loaders`
       * :class:`importlib.abc.Loader`
@@ -883,8 +977,11 @@ Glossary
       See :term:`method resolution order`.
 
    mutable
-      Mutable objects can change their value but keep their :func:`id`.  See
-      also :term:`immutable`.
+      An :term:`object` with state that is allowed to change during the course
+      of the program.  In multi-threaded programs, mutable objects that are
+      shared between threads require careful synchronization to avoid
+      :term:`race conditions <race condition>`.  See also :term:`immutable`,
+      :term:`thread-safe`, and :term:`concurrent modification`.
 
    named tuple
       The term "named tuple" applies to any type or class that inherits from
@@ -924,12 +1021,24 @@ Glossary
       modules, respectively.
 
    namespace package
-      A :pep:`420` :term:`package` which serves only as a container for
-      subpackages.  Namespace packages may have no physical representation,
+      A :term:`package` which serves only as a container for subpackages.
+      Namespace packages may have no physical representation,
       and specifically are not like a :term:`regular package` because they
       have no ``__init__.py`` file.
 
+      Namespace packages allow several individually installable packages to have a common parent package.
+      Otherwise, it is recommended to use a :term:`regular package`.
+
+      For more information, see :pep:`420` and :ref:`reference-namespace-package`.
+
       See also :term:`module`.
+
+   native code
+      Code that is compiled to machine instructions and runs directly on the
+      processor, as opposed to code that is interpreted or runs in a virtual
+      machine.  In the context of Python, native code typically refers to
+      C, C++, Rust or Fortran code in :term:`extension modules <extension module>`
+      that can be called from Python.  See also :term:`extension module`.
 
    nested scope
       The ability to refer to a variable in an enclosing definition.  For
@@ -946,6 +1055,15 @@ Glossary
       versatile features like :attr:`~object.__slots__`, descriptors,
       properties, :meth:`~object.__getattribute__`, class methods, and static
       methods.
+
+   non-deterministic
+      Behavior where the outcome of a program can vary between executions with
+      the same inputs.  In multi-threaded programs, non-deterministic behavior
+      often results from :term:`race conditions <race condition>` where the
+      relative timing or interleaving of threads affects the result.
+      Proper synchronization using :term:`locks <lock>` and other
+      :term:`synchronization primitives <synchronization primitive>` helps
+      ensure deterministic behavior.
 
    object
       Any data with state (attributes or value) and defined behavior
@@ -967,6 +1085,16 @@ Glossary
       ``__path__`` attribute.
 
       See also :term:`regular package` and :term:`namespace package`.
+
+   parallelism
+      Executing multiple operations at the same time (e.g. on multiple CPU
+      cores).  In Python builds with the
+      :term:`global interpreter lock (GIL) <global interpreter lock>`, only one
+      thread runs Python bytecode at a time, so taking advantage of multiple
+      CPU cores typically involves multiple processes
+      (e.g. :mod:`multiprocessing`) or native extensions that release the GIL.
+      In :term:`free-threaded <free threading>` Python, multiple Python threads
+      can run Python code simultaneously on different cores.
 
    parameter
       A named entity in a :term:`function` (or method) definition that
@@ -1020,6 +1148,16 @@ Glossary
       :ref:`the difference between arguments and parameters
       <faq-argument-vs-parameter>`, the :class:`inspect.Parameter` class, the
       :ref:`function` section, and :pep:`362`.
+
+   per-object lock
+      A :term:`lock` associated with an individual object instance rather than
+      a global lock shared across all objects. In :term:`free-threaded
+      <free threading>` Python, built-in types like :class:`dict` and
+      :class:`list` use per-object locks to allow concurrent operations on
+      different objects while serializing operations on the same object.
+      Operations that hold the per-object lock prevent other locking operations
+      on the same object from proceeding, but do not block :term:`lock-free`
+      operations.
 
    path entry
       A single location on the :term:`import path` which the :term:`path
@@ -1142,6 +1280,18 @@ Glossary
          >>> email.mime.text.__name__
          'email.mime.text'
 
+   race condition
+      A condition of a program where the behavior
+      depends on the relative timing or ordering of events, particularly in
+      multi-threaded programs.  Race conditions can lead to
+      :term:`non-deterministic` behavior and bugs that are difficult to
+      reproduce.  A :term:`data race` is a specific type of race condition
+      involving unsynchronized access to shared memory.  The :term:`LBYL`
+      coding style is particularly susceptible to race conditions in
+      multi-threaded code.  Using :term:`locks <lock>` and other
+      :term:`synchronization primitives <synchronization primitive>`
+      helps prevent race conditions.
+
    reference count
       The number of references to an object.  When the reference count of an
       object drops to zero, it is deallocated.  Some objects are
@@ -1152,11 +1302,35 @@ Glossary
       :func:`sys.getrefcount` function to return the
       reference count for a particular object.
 
+      In :term:`CPython`, reference counts are not considered to be stable
+      or well-defined values; the number of references to an object, and how
+      that number is affected by Python code, may be different between
+      versions.
+
    regular package
       A traditional :term:`package`, such as a directory containing an
       ``__init__.py`` file.
 
       See also :term:`namespace package`.
+
+   reentrant
+      A property of a function or :term:`lock` that allows it to be called or
+      acquired multiple times by the same thread without causing errors or a
+      :term:`deadlock`.
+
+      For functions, reentrancy means the function can be safely called again
+      before a previous invocation has completed, which is important when
+      functions may be called recursively or from signal handlers. Thread-unsafe
+      functions may be :term:`non-deterministic` if they're called reentrantly in a
+      multithreaded program.
+
+      For locks, Python's :class:`threading.RLock` (reentrant lock) is
+      reentrant, meaning a thread that already holds the lock can acquire it
+      again without blocking.  In contrast, :class:`threading.Lock` is not
+      reentrant - attempting to acquire it twice from the same thread will cause
+      a deadlock.
+
+      See also :term:`lock` and :term:`deadlock`.
 
    REPL
       An acronym for the "read–eval–print loop", another name for the
@@ -1182,8 +1356,9 @@ Glossary
       The :class:`collections.abc.Sequence` abstract base class
       defines a much richer interface that goes beyond just
       :meth:`~object.__getitem__` and :meth:`~object.__len__`, adding
-      :meth:`!count`, :meth:`!index`, :meth:`~object.__contains__`, and
-      :meth:`~object.__reversed__`. Types that implement this expanded
+      :meth:`~sequence.count`, :meth:`~sequence.index`,
+      :meth:`~object.__contains__`, and :meth:`~object.__reversed__`.
+      Types that implement this expanded
       interface can be registered explicitly using
       :func:`~abc.ABCMeta.register`. For more documentation on sequence
       methods generally, see
@@ -1224,6 +1399,16 @@ Glossary
       and ending with double underscores.  Special methods are documented in
       :ref:`specialnames`.
 
+   standard library
+      The collection of :term:`packages <package>`, :term:`modules <module>`
+      and :term:`extension modules <extension module>` distributed as a part
+      of the official Python interpreter package.  The exact membership of the
+      collection may vary based on platform, available system libraries, or
+      other criteria.  Documentation can be found at :ref:`library-index`.
+
+      See also :data:`sys.stdlib_module_names` for a list of all possible
+      standard library module names.
+
    statement
       A statement is part of a suite (a "block" of code).  A statement is either
       an :term:`expression` or one of several constructs with a keyword, such
@@ -1233,6 +1418,9 @@ Glossary
       An external tool that reads Python code and analyzes it, looking for
       issues such as incorrect types. See also :term:`type hints <type hint>`
       and the :mod:`typing` module.
+
+   stdlib
+      An abbreviation of :term:`standard library`.
 
    strong reference
       In Python's C API, a strong reference is a reference to an object
@@ -1247,6 +1435,18 @@ Glossary
       avoid leaking one reference.
 
       See also :term:`borrowed reference`.
+
+   synchronization primitive
+      A basic building block for coordinating (synchronizing) the execution of
+      multiple threads to ensure :term:`thread-safe` access to shared resources.
+      Python's :mod:`threading` module provides several synchronization primitives
+      including :class:`~threading.Lock`, :class:`~threading.RLock`,
+      :class:`~threading.Semaphore`, :class:`~threading.Condition`,
+      :class:`~threading.Event`, and :class:`~threading.Barrier`.  Additionally,
+      the :mod:`queue` module provides multi-producer, multi-consumer queues
+      that are especially useful in multithreaded programs. These
+      primitives help prevent :term:`race conditions <race condition>` and
+      coordinate thread execution.  See also :term:`lock`.
 
    text encoding
       A string in Python is a sequence of Unicode code points (in range
@@ -1270,6 +1470,30 @@ Glossary
 
       See also :term:`binary file` for a file object able to read and write
       :term:`bytes-like objects <bytes-like object>`.
+
+   thread-safe
+      A module, function, or class that behaves correctly when used by multiple
+      threads concurrently.  Thread-safe code uses appropriate
+      :term:`synchronization primitives <synchronization primitive>` like
+      :term:`locks <lock>` to protect shared mutable state, or is designed
+      to avoid shared mutable state entirely.  In the
+      :term:`free-threaded <free threading>` build, built-in types like
+      :class:`dict`, :class:`list`, and :class:`set` use internal locking
+      to make many operations thread-safe, although thread safety is not
+      necessarily guaranteed.  Code that is not thread-safe may experience
+      :term:`race conditions <race condition>` and :term:`data races <data race>`
+      when used in multi-threaded programs.
+
+   token
+
+      A small unit of source code, generated by the
+      :ref:`lexical analyzer <lexical>` (also called the *tokenizer*).
+      Names, numbers, strings, operators,
+      newlines and similar are represented by tokens.
+
+      The :mod:`tokenize` module exposes Python's lexical analyzer.
+      The :mod:`token` module contains information on the various types
+      of tokens.
 
    triple-quoted string
       A string which is bound by three instances of either a quotation mark
@@ -1358,6 +1582,11 @@ Glossary
    virtual machine
       A computer defined entirely in software.  Python's virtual machine
       executes the :term:`bytecode` emitted by the bytecode compiler.
+
+   walrus operator
+      A light-hearted way to refer to the :ref:`assignment expression
+      <assignment-expressions>` operator ``:=`` because it looks a bit like a
+      walrus if you turn your head.
 
    Zen of Python
       Listing of Python design principles and philosophies that are helpful in

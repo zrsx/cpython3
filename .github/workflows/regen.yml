@@ -1,0 +1,138 @@
+name: CPython 3.13.13 AOSP Full Proper Regen
+on:
+  workflow_dispatch:
+  push:
+    branches: [ aosp ]
+
+jobs:
+  # JOB 1: Architecture-Specific Header Generation (Parallel)
+  regen-platforms:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            image: redhat/ubi9:9.8-1779374378
+            name: linux-bionic
+          - os: macos-latest
+            name: macos-darwin
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.image }}
+    steps:
+      - name: Install Tools
+        run: |
+          if [ -f /etc/redhat-release ]; then
+            dnf install -y git wget unzip xz gcc gcc-c++ make python3-devel ncurses-devel autoconf
+            git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          else
+            brew install autoconf
+          fi
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup NDK r27d & AOSP Shim (Linux Only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-r27d-linux.zip
+          unzip -q android-ndk-r27d-linux.zip
+          export AOSP_ROOT=$(pwd)/fake_aosp
+          mkdir -p $AOSP_ROOT/build/soong/scripts/
+          mkdir -p $AOSP_ROOT/prebuilts/clang/host/linux-x86/
+          echo "print('r27d')" > $AOSP_ROOT/build/soong/scripts/get_clang_version.py
+          ln -s $(pwd)/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64 $AOSP_ROOT/prebuilts/clang/host/linux-x86/r27d
+          mkdir -p $AOSP_ROOT/prebuilts/build-tools/sysroots/
+          ln -s $(pwd)/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64/sysroot $AOSP_ROOT/prebuilts/build-tools/sysroots/aarch64-unknown-linux-musl
+          mkdir -p $AOSP_ROOT/external/python/
+          cd .. && mv cpython3 $AOSP_ROOT/external/python/
+          echo "AOSP_ROOT_READY=$AOSP_ROOT/external/python/cpython3" >> $GITHUB_ENV
+
+      - name: Run AOSP regen.sh
+        run: |
+          if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
+            cd ${{ env.AOSP_ROOT_READY }}
+            chmod +x android/regen.sh
+            ./android/regen.sh --host=aarch64-linux-android24
+          else
+            chmod +x android/regen.sh
+            ./android/regen.sh
+          fi
+
+      - name: Upload Platform Artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.name }}-assets
+          path: |
+            android/
+            Android-*.bp
+
+  # JOB 2: Global CPython Regeneration & Final Consolidation
+  finalize-and-push:
+    needs: regen-platforms
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/python/autoconf:2024.10.16.11360930377
+    permissions:
+      contents: write
+    steps:
+      - name: Prepare Git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+
+      - name: Full Makefile & AOSP Regeneration
+        run: |
+          # 1. Merge platform artifacts
+          cp -r linux-bionic-assets/* .
+          cp -r macos-darwin-assets/* .
+          rm -rf linux-bionic-assets macos-darwin-assets
+
+          # 2. Run Configure logic
+          chmod +x ./configure
+          ./configure --with-pydebug
+          
+          # 3. Run ALL requested regeneration targets from Makefile
+          # First, sync the configure script itself
+          make regen-configure
+          
+          # Run the master regen target
+          make regen-all
+          
+          # Run the "Manual" targets identified in your Makefile grep
+          make regen-stdlib-module-names
+          make regen-limited-abi
+          make regen-sbom
+          make regen-unicodedata
+          make regen-re
+          make regen-jit
+          make regen-test-levenshtein
+          
+          # 4. Final AOSP Suffix Update
+          # We run this one last time to ensure the Android-*.bp files 
+          # include the newly generated files (like frozen_modules/*.h)
+          ./android/regen.sh --host=aarch64-linux-android24
+          
+          make distclean
+
+      - name: Commit and Push to AOSP
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add all regenerated headers, blueprint lists, and core files
+          git add android/ Android-*.bp configure pyconfig.h.in Include/ Lib/ METADATA
+          
+          if git diff --cached --quiet; then
+            echo "No changes detected."
+          else
+            git commit -m "cpython3: Full Proper Regeneration to 3.13.13
+            
+            - NDK: r27d / SDK: 24
+            - Autoconf: 2.71 (Official Image)
+            - Makefile Targets: regen-all, regen-configure, regen-jit, regen-stdlib-module-names
+            - Platforms: Android Bionic, Linux, Darwin"
+            git push origin aosp
+          fi

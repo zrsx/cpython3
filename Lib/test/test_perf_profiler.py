@@ -63,11 +63,13 @@ class TestPerfTrampoline(unittest.TestCase):
                 """
         with temp_dir() as script_dir:
             script = make_script(script_dir, "perftest", code)
+            env = {**os.environ, "PYTHON_JIT": "0"}
             with subprocess.Popen(
                 [sys.executable, "-Xperf", script],
                 text=True,
                 stderr=subprocess.PIPE,
                 stdout=subprocess.PIPE,
+                env=env,
             ) as process:
                 stdout, stderr = process.communicate()
 
@@ -131,11 +133,13 @@ class TestPerfTrampoline(unittest.TestCase):
                 """
         with temp_dir() as script_dir:
             script = make_script(script_dir, "perftest", code)
+            env = {**os.environ, "PYTHON_JIT": "0"}
             with subprocess.Popen(
                 [sys.executable, "-Xperf", script],
                 text=True,
                 stderr=subprocess.PIPE,
                 stdout=subprocess.PIPE,
+                env=env,
             ) as process:
                 stdout, stderr = process.communicate()
 
@@ -157,6 +161,58 @@ class TestPerfTrampoline(unittest.TestCase):
         self.assertIn(f"py::bar_fork:{script}", child_perf_file_contents)
         self.assertIn(f"py::baz_fork:{script}", child_perf_file_contents)
 
+        # The parent's map should not contain the child's symbols.
+        self.assertNotIn(f"py::foo_fork:{script}", perf_file_contents)
+        self.assertNotIn(f"py::bar_fork:{script}", perf_file_contents)
+        self.assertNotIn(f"py::baz_fork:{script}", perf_file_contents)
+
+        # The child's map should not contain the parent's symbols.
+        self.assertNotIn(f"py::foo:{script}", child_perf_file_contents)
+        self.assertNotIn(f"py::bar:{script}", child_perf_file_contents)
+        self.assertNotIn(f"py::baz:{script}", child_perf_file_contents)
+
+    @unittest.skipIf(support.check_bolt_optimized(), "fails on BOLT instrumented binaries")
+    def test_trampoline_works_after_fork_with_many_code_objects(self):
+        code = """if 1:
+                import gc, os, sys, signal
+
+                # Create many code objects so trampoline_refcount > 1
+                for i in range(50):
+                    exec(compile(f"def _dummy_{i}(): pass", f"<test{i}>", "exec"))
+
+                pid = os.fork()
+                if pid == 0:
+                    # Child: create and destroy new code objects,
+                    # then collect garbage. If the old code watcher
+                    # survived the fork, the double-decrement of
+                    # trampoline_refcount will cause a SIGSEGV.
+                    for i in range(50):
+                        exec(compile(f"def _child_{i}(): pass", f"<child{i}>", "exec"))
+                    gc.collect()
+                    os._exit(0)
+                else:
+                    _, status = os.waitpid(pid, 0)
+                    if os.WIFSIGNALED(status):
+                        print(f"FAIL: child killed by signal {os.WTERMSIG(status)}", file=sys.stderr)
+                        sys.exit(1)
+                    sys.exit(os.WEXITSTATUS(status))
+                """
+        with temp_dir() as script_dir:
+            script = make_script(script_dir, "perftest", code)
+            env = {**os.environ, "PYTHON_JIT": "0"}
+            with subprocess.Popen(
+                [sys.executable, "-Xperf", script],
+                text=True,
+                stderr=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                env=env,
+            ) as process:
+                stdout, stderr = process.communicate()
+
+        self.assertEqual(process.returncode, 0, stderr)
+        self.assertEqual(stderr, "")
+
+    @unittest.skipIf(support.check_bolt_optimized(), "fails on BOLT instrumented binaries")
     def test_sys_api(self):
         code = """if 1:
                 import sys
@@ -180,11 +236,13 @@ class TestPerfTrampoline(unittest.TestCase):
                 """
         with temp_dir() as script_dir:
             script = make_script(script_dir, "perftest", code)
+            env = {**os.environ, "PYTHON_JIT": "0"}
             with subprocess.Popen(
                 [sys.executable, script],
                 text=True,
                 stderr=subprocess.PIPE,
                 stdout=subprocess.PIPE,
+                env=env,
             ) as process:
                 stdout, stderr = process.communicate()
 
@@ -225,6 +283,24 @@ class TestPerfTrampoline(unittest.TestCase):
                 """
         assert_python_ok("-c", code)
 
+    def test_sys_api_perf_jit_backend(self):
+        code = """if 1:
+                import sys
+                sys.activate_stack_trampoline("perf_jit")
+                assert sys.is_stack_trampoline_active() is True
+                sys.deactivate_stack_trampoline()
+                assert sys.is_stack_trampoline_active() is False
+                """
+        assert_python_ok("-c", code, PYTHON_JIT="0")
+
+    def test_sys_api_with_existing_perf_jit_trampoline(self):
+        code = """if 1:
+                import sys
+                sys.activate_stack_trampoline("perf_jit")
+                sys.activate_stack_trampoline("perf_jit")
+                """
+        assert_python_ok("-c", code, PYTHON_JIT="0")
+
 
 def is_unwinding_reliable_with_frame_pointers():
     cflags = sysconfig.get_config_var("PY_CORE_CFLAGS")
@@ -252,6 +328,8 @@ def perf_command_works():
             cmd = (
                 "perf",
                 "record",
+                "--no-buildid",
+                "--no-buildid-cache",
                 "-g",
                 "--call-graph=fp",
                 "-o",
@@ -261,8 +339,9 @@ def perf_command_works():
                 "-c",
                 'print("hello")',
             )
+            env = {**os.environ, "PYTHON_JIT": "0"}
             stdout = subprocess.check_output(
-                cmd, cwd=script_dir, text=True, stderr=subprocess.STDOUT
+                cmd, cwd=script_dir, text=True, stderr=subprocess.STDOUT, env=env
             )
         except (subprocess.SubprocessError, OSError):
             return False
@@ -274,18 +353,28 @@ def perf_command_works():
 
 
 def run_perf(cwd, *args, use_jit=False, **env_vars):
+    env = os.environ.copy()
     if env_vars:
-        env = os.environ.copy()
         env.update(env_vars)
-    else:
-        env = None
+    env["PYTHON_JIT"] = "0"
     output_file = cwd + "/perf_output.perf"
     if not use_jit:
-        base_cmd = ("perf", "record", "-g", "--call-graph=fp", "-o", output_file, "--")
+        base_cmd = (
+            "perf",
+            "record",
+            "--no-buildid",
+            "--no-buildid-cache",
+            "-g",
+            "--call-graph=fp",
+            "-o", output_file,
+            "--"
+        )
     else:
         base_cmd = (
             "perf",
             "record",
+            "--no-buildid",
+            "--no-buildid-cache",
             "-g",
             "--call-graph=dwarf,65528",
             "-F99",
@@ -299,6 +388,7 @@ def run_perf(cwd, *args, use_jit=False, **env_vars):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=env,
+        text=True,
     )
     if proc.returncode:
         print(proc.stderr, file=sys.stderr)
@@ -308,10 +398,10 @@ def run_perf(cwd, *args, use_jit=False, **env_vars):
         jit_output_file = cwd + "/jit_output.dump"
         command = ("perf", "inject", "-j", "-i", output_file, "-o", jit_output_file)
         proc = subprocess.run(
-            command, stderr=subprocess.PIPE, stdout=subprocess.PIPE, env=env
+            command, stderr=subprocess.PIPE, stdout=subprocess.PIPE, env=env, text=True
         )
         if proc.returncode:
-            print(proc.stderr)
+            print(proc.stderr, file=sys.stderr)
             raise ValueError(f"Perf failed with return code {proc.returncode}")
         # Copy the jit_output_file to the output_file
         os.rename(jit_output_file, output_file)
@@ -323,10 +413,9 @@ def run_perf(cwd, *args, use_jit=False, **env_vars):
         stderr=subprocess.PIPE,
         env=env,
         check=True,
+        text=True,
     )
-    return proc.stdout.decode("utf-8", "replace"), proc.stderr.decode(
-        "utf-8", "replace"
-    )
+    return proc.stdout, proc.stderr
 
 
 class TestPerfProfilerMixin:
@@ -446,11 +535,13 @@ class TestPerfProfiler(unittest.TestCase, TestPerfProfilerMixin):
 
         with temp_dir() as script_dir:
             script = make_script(script_dir, "perftest", code)
+            env = {**os.environ, "PYTHON_JIT": "0"}
             with subprocess.Popen(
                 [sys.executable, "-Xperf", script],
                 universal_newlines=True,
                 stderr=subprocess.PIPE,
                 stdout=subprocess.PIPE,
+                env=env,
             ) as process:
                 stdout, stderr = process.communicate()
 
@@ -482,15 +573,19 @@ class TestPerfProfiler(unittest.TestCase, TestPerfProfilerMixin):
 
 def _is_perf_vesion_at_least(major, minor):
     # The output of perf --version looks like "perf version 6.7-3" but
-    # it can also be perf version "perf version 5.15.143"
+    # it can also be perf version "perf version 5.15.143", or even include
+    # a commit hash in the version string, like "6.12.9.g242e6068fd5c"
+    #
+    # PermissionError is raised if perf does not exist on the Windows Subsystem
+    # for Linux, see #134987
     try:
         output = subprocess.check_output(["perf", "--version"], text=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, FileNotFoundError, PermissionError):
         return False
     version = output.split()[2]
     version = version.split("-")[0]
     version = version.split(".")
-    version = tuple(map(int, version))
+    version = tuple(map(int, version[:2]))
     return version >= (major, minor)
 
 

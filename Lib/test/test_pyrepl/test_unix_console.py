@@ -1,11 +1,18 @@
+import errno
 import itertools
+import os
+import signal
 import sys
+import threading
 import unittest
 from functools import partial
-from unittest import TestCase
-from unittest.mock import MagicMock, call, patch, ANY
+from test.support import os_helper
+from test.support import threading_helper
 
-from .support import handle_all_events, code_to_events
+from unittest import TestCase
+from unittest.mock import MagicMock, call, patch, ANY, Mock
+
+from .support import handle_all_events, code_to_events, reader_no_colors
 
 try:
     from _pyrepl.console import Event
@@ -116,6 +123,20 @@ TERM_CAPABILITIES = {
 @patch("termios.tcsetattr", lambda a, b, c: None)
 @patch("os.write")
 class TestConsole(TestCase):
+    def test_no_newline(self, _os_write):
+        code = "1"
+        events = code_to_events(code)
+        _, con = handle_events_unix_console(events)
+        self.assertNotIn(call(ANY, b'\n'), _os_write.mock_calls)
+        con.restore()
+
+    def test_newline(self, _os_write):
+        code = "\n"
+        events = code_to_events(code)
+        _, con = handle_events_unix_console(events)
+        _os_write.assert_any_call(ANY, b"\n")
+        con.restore()
+
     def test_simple_addition(self, _os_write):
         code = "12+34"
         events = code_to_events(code)
@@ -250,7 +271,9 @@ class TestConsole(TestCase):
         # fmt: on
 
         events = itertools.chain(code_to_events(code))
-        reader, console = handle_events_short_unix_console(events)
+        reader, console = handle_events_short_unix_console(
+            events, prepare_reader=reader_no_colors
+        )
 
         console.height = 2
         console.getheightwidth = MagicMock(lambda _: (2, 80))
@@ -312,3 +335,60 @@ class TestConsole(TestCase):
         )
         console.restore()
         con.restore()
+
+    def test_getheightwidth_with_invalid_environ(self, _os_write):
+        # gh-128636
+        console = UnixConsole()
+        with os_helper.EnvironmentVarGuard() as env:
+            env["LINES"] = ""
+            self.assertIsInstance(console.getheightwidth(), tuple)
+            env["COLUMNS"] = ""
+            self.assertIsInstance(console.getheightwidth(), tuple)
+            os.environ = []
+            self.assertIsInstance(console.getheightwidth(), tuple)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS")
+    def test_restore_with_invalid_environ_on_macos(self, _os_write):
+        # gh-128636 for macOS
+        console = UnixConsole(term="xterm")
+        with os_helper.EnvironmentVarGuard():
+            os.environ = []
+            console.prepare()  # needed to call restore()
+            console.restore()  # this should succeed
+
+    @threading_helper.reap_threads
+    @threading_helper.requires_working_threading()
+    def test_restore_in_thread(self, _os_write):
+        # gh-139391: ensure that console.restore() silently suppresses
+        # exceptions when calling signal.signal() from a non-main thread.
+        console = unix_console([])
+        console.old_sigwinch = signal.SIG_DFL
+        thread = threading.Thread(target=console.restore)
+        thread.start()
+        thread.join()  # this should not raise
+
+
+@unittest.skipIf(sys.platform == "win32", "No Unix console on Windows")
+class TestUnixConsoleEIOHandling(TestCase):
+
+    @patch('_pyrepl.unix_console.tcsetattr')
+    @patch('_pyrepl.unix_console.tcgetattr')
+    def test_eio_error_handling_in_restore(self, mock_tcgetattr, mock_tcsetattr):
+
+        import termios
+        mock_termios = Mock()
+        mock_termios.iflag = 0
+        mock_termios.oflag = 0
+        mock_termios.cflag = 0
+        mock_termios.lflag = 0
+        mock_termios.cc = [0] * 32
+        mock_termios.copy.return_value = mock_termios
+        mock_tcgetattr.return_value = mock_termios
+
+        console = UnixConsole(term="xterm")
+        console.prepare()
+
+        mock_tcsetattr.side_effect = termios.error(errno.EIO, "Input/output error")
+
+        # EIO error should be handled gracefully in restore()
+        console.restore()

@@ -4,6 +4,7 @@ import sys
 import contextlib
 import importlib.util
 import inspect
+import io
 import pydoc
 import py_compile
 import keyword
@@ -468,6 +469,32 @@ class PydocDocTest(unittest.TestCase):
         result, doc_loc = get_pydoc_text(xml.etree)
         self.assertEqual(doc_loc, "", "MODULE DOCS incorrectly includes a link")
 
+    def test_online_docs_link(self):
+        import encodings.idna
+        import importlib._bootstrap
+
+        module_docs = {
+            'encodings': 'codecs#module-encodings',
+            'encodings.idna': 'codecs#module-encodings.idna',
+        }
+
+        with unittest.mock.patch('pydoc_data.module_docs.module_docs', module_docs):
+            doc = pydoc.TextDoc()
+
+            basedir = os.path.dirname(encodings.__file__)
+            doc_link = doc.getdocloc(encodings, basedir=basedir)
+            self.assertIsNotNone(doc_link)
+            self.assertIn('codecs#module-encodings', doc_link)
+            self.assertNotIn('encodings.html', doc_link)
+
+            doc_link = doc.getdocloc(encodings.idna, basedir=basedir)
+            self.assertIsNotNone(doc_link)
+            self.assertIn('codecs#module-encodings.idna', doc_link)
+            self.assertNotIn('encodings.idna.html', doc_link)
+
+            doc_link = doc.getdocloc(importlib._bootstrap, basedir=basedir)
+            self.assertIsNone(doc_link)
+
     def test_getpager_with_stdin_none(self):
         previous_stdin = sys.stdin
         try:
@@ -878,6 +905,82 @@ class PydocDocTest(unittest.TestCase):
                 print('line 2: hi"""', file=script)
             synopsis = pydoc.synopsis(TESTFN, {})
             self.assertEqual(synopsis, 'line 1: h\xe9')
+
+    def test_source_synopsis(self):
+        def check(source, expected, encoding=None):
+            if isinstance(source, str):
+                source_file = StringIO(source)
+            else:
+                source_file = io.TextIOWrapper(io.BytesIO(source), encoding=encoding)
+            with source_file:
+                result = pydoc.source_synopsis(source_file)
+                self.assertEqual(result, expected)
+
+        check('"""Single line docstring."""',
+              'Single line docstring.')
+        check('"""First line of docstring.\nSecond line.\nThird line."""',
+              'First line of docstring.')
+        check('"""First line of docstring.\\nSecond line.\\nThird line."""',
+              'First line of docstring.')
+        check('"""  Whitespace around docstring.  """',
+              'Whitespace around docstring.')
+        check('import sys\n"""No docstring"""',
+              None)
+        check('  \n"""Docstring after empty line."""',
+              'Docstring after empty line.')
+        check('# Comment\n"""Docstring after comment."""',
+              'Docstring after comment.')
+        check('  # Indented comment\n"""Docstring after comment."""',
+              'Docstring after comment.')
+        check('""""""', # Empty docstring
+              '')
+        check('', # Empty file
+              None)
+        check('"""Embedded\0null byte"""',
+              None)
+        check('"""Embedded null byte"""\0',
+              None)
+        check('"""Café and résumé."""',
+              'Café and résumé.')
+        check("'''Triple single quotes'''",
+              'Triple single quotes')
+        check('"Single double quotes"',
+              'Single double quotes')
+        check("'Single single quotes'",
+              'Single single quotes')
+        check('"""split\\\nline"""',
+              'splitline')
+        check('"""Unrecognized escape \\sequence"""',
+              'Unrecognized escape \\sequence')
+        check('"""Invalid escape seq\\uence"""',
+              None)
+        check('r"""Raw \\stri\\ng"""',
+              'Raw \\stri\\ng')
+        check('b"""Bytes literal"""',
+              None)
+        check('f"""f-string"""',
+              None)
+        check('"""Concatenated""" \\\n"string" \'literals\'',
+              'Concatenatedstringliterals')
+        check('"""String""" + """expression"""',
+              None)
+        check('("""In parentheses""")',
+              'In parentheses')
+        check('("""Multiple lines """\n"""in parentheses""")',
+              'Multiple lines in parentheses')
+        check('()', # tuple
+              None)
+        check(b'# coding: iso-8859-15\n"""\xa4uro sign"""',
+              '€uro sign', encoding='iso-8859-15')
+        check(b'"""\xa4"""', # Decoding error
+              None, encoding='utf-8')
+
+        with tempfile.NamedTemporaryFile(mode='w+', encoding='utf-8') as temp_file:
+            temp_file.write('"""Real file test."""\n')
+            temp_file.flush()
+            temp_file.seek(0)
+            result = pydoc.source_synopsis(temp_file)
+            self.assertEqual(result, "Real file test.")
 
     @requires_docstrings
     def test_synopsis_sourceless(self):
@@ -1798,6 +1901,11 @@ foo
             html
         )
 
+    def test_module_none(self):
+        # Issue #128772
+        from test.test_pydoc import module_none
+        pydoc.render_doc(module_none)
+
 
 class PydocFodderTest(unittest.TestCase):
     def tearDown(self):
@@ -1825,18 +1933,30 @@ class PydocFodderTest(unittest.TestCase):
         self.assertIn(' |  global_func(x, y) from test.test_pydoc.pydocfodder', lines)
         self.assertIn(' |  global_func_alias = global_func(x, y)', lines)
         self.assertIn(' |  global_func2_alias = global_func2(x, y) from test.test_pydoc.pydocfodder', lines)
-        self.assertIn(' |  count(self, value, /) from builtins.list', lines)
-        self.assertIn(' |  list_count = count(self, value, /)', lines)
-        self.assertIn(' |  __repr__(self, /) from builtins.object', lines)
-        self.assertIn(' |  object_repr = __repr__(self, /)', lines)
+        if not support.MISSING_C_DOCSTRINGS:
+            self.assertIn(' |  count(self, value, /) from builtins.list', lines)
+            self.assertIn(' |  list_count = count(self, value, /)', lines)
+            self.assertIn(' |  __repr__(self, /) from builtins.object', lines)
+            self.assertIn(' |  object_repr = __repr__(self, /)', lines)
+        else:
+            self.assertIn(' |  count(self, object, /) from builtins.list', lines)
+            self.assertIn(' |  list_count = count(self, object, /)', lines)
+            self.assertIn(' |  __repr__(...) from builtins.object', lines)
+            self.assertIn(' |  object_repr = __repr__(...)', lines)
 
         lines = self.getsection(result, f' |  Static methods {where}:', ' |  ' + '-'*70)
         self.assertIn(' |  A_classmethod_ref = A_classmethod(x) class method of test.test_pydoc.pydocfodder.A', lines)
         note = '' if cls is pydocfodder.B else ' class method of test.test_pydoc.pydocfodder.B'
         self.assertIn(' |  B_classmethod_ref = B_classmethod(x)' + note, lines)
         self.assertIn(' |  A_method_ref = A_method() method of test.test_pydoc.pydocfodder.A instance', lines)
-        self.assertIn(' |  get(key, default=None, /) method of builtins.dict instance', lines)
-        self.assertIn(' |  dict_get = get(key, default=None, /) method of builtins.dict instance', lines)
+        if not support.MISSING_C_DOCSTRINGS:
+            self.assertIn(' |  get(key, default=None, /) method of builtins.dict instance', lines)
+            self.assertIn(' |  dict_get = get(key, default=None, /) method of builtins.dict instance', lines)
+            self.assertIn(' |  sin(x, /)', lines)
+        else:
+            self.assertIn(' |  get(...) method of builtins.dict instance', lines)
+            self.assertIn(' |  dict_get = get(...) method of builtins.dict instance', lines)
+            self.assertIn(' |  sin(object, /)', lines)
 
         lines = self.getsection(result, f' |  Class methods {where}:', ' |  ' + '-'*70)
         self.assertIn(' |  B_classmethod(x)', lines)
@@ -1855,10 +1975,16 @@ class PydocFodderTest(unittest.TestCase):
         self.assertIn('global_func(x, y) from test.test_pydoc.pydocfodder', lines)
         self.assertIn('global_func_alias = global_func(x, y)', lines)
         self.assertIn('global_func2_alias = global_func2(x, y) from test.test_pydoc.pydocfodder', lines)
-        self.assertIn('count(self, value, /) from builtins.list', lines)
-        self.assertIn('list_count = count(self, value, /)', lines)
-        self.assertIn('__repr__(self, /) from builtins.object', lines)
-        self.assertIn('object_repr = __repr__(self, /)', lines)
+        if not support.MISSING_C_DOCSTRINGS:
+            self.assertIn('count(self, value, /) from builtins.list', lines)
+            self.assertIn('list_count = count(self, value, /)', lines)
+            self.assertIn('__repr__(self, /) from builtins.object', lines)
+            self.assertIn('object_repr = __repr__(self, /)', lines)
+        else:
+            self.assertIn('count(self, object, /) from builtins.list', lines)
+            self.assertIn('list_count = count(self, object, /)', lines)
+            self.assertIn('__repr__(...) from builtins.object', lines)
+            self.assertIn('object_repr = __repr__(...)', lines)
 
         lines = self.getsection(result, f'Static methods {where}:', '-'*70)
         self.assertIn('A_classmethod_ref = A_classmethod(x) class method of test.test_pydoc.pydocfodder.A', lines)
@@ -1895,15 +2021,32 @@ class PydocFodderTest(unittest.TestCase):
         self.assertIn('    A_method3 = A_method() method of B instance', lines)
         self.assertIn('    A_staticmethod_ref = A_staticmethod(x, y)', lines)
         self.assertIn('    A_staticmethod_ref2 = A_staticmethod(y) method of B instance', lines)
-        self.assertIn('    get(key, default=None, /) method of builtins.dict instance', lines)
-        self.assertIn('    dict_get = get(key, default=None, /) method of builtins.dict instance', lines)
+        if not support.MISSING_C_DOCSTRINGS:
+            self.assertIn('    get(key, default=None, /) method of builtins.dict instance', lines)
+            self.assertIn('    dict_get = get(key, default=None, /) method of builtins.dict instance', lines)
+        else:
+            self.assertIn('    get(...) method of builtins.dict instance', lines)
+            self.assertIn('    dict_get = get(...) method of builtins.dict instance', lines)
+
         # unbound methods
         self.assertIn('    B_method(self)', lines)
         self.assertIn('    B_method2 = B_method(self)', lines)
-        self.assertIn('    count(self, value, /) unbound builtins.list method', lines)
-        self.assertIn('    list_count = count(self, value, /) unbound builtins.list method', lines)
-        self.assertIn('    __repr__(self, /) unbound builtins.object method', lines)
-        self.assertIn('    object_repr = __repr__(self, /) unbound builtins.object method', lines)
+        if not support.MISSING_C_DOCSTRINGS:
+            self.assertIn('    count(self, value, /) unbound builtins.list method', lines)
+            self.assertIn('    list_count = count(self, value, /) unbound builtins.list method', lines)
+            self.assertIn('    __repr__(self, /) unbound builtins.object method', lines)
+            self.assertIn('    object_repr = __repr__(self, /) unbound builtins.object method', lines)
+        else:
+            self.assertIn('    count(self, object, /) unbound builtins.list method', lines)
+            self.assertIn('    list_count = count(self, object, /) unbound builtins.list method', lines)
+            self.assertIn('    __repr__(...) unbound builtins.object method', lines)
+            self.assertIn('    object_repr = __repr__(...) unbound builtins.object method', lines)
+
+        # builtin functions
+        if not support.MISSING_C_DOCSTRINGS:
+            self.assertIn('    sin(x, /)', lines)
+        else:
+            self.assertIn('    sin(object, /)', lines)
 
     def test_html_doc_routines_in_module(self):
         doc = pydoc.HTMLDoc()
@@ -1924,15 +2067,31 @@ class PydocFodderTest(unittest.TestCase):
         self.assertIn(' A_method3 = A_method() method of B instance', lines)
         self.assertIn(' A_staticmethod_ref = A_staticmethod(x, y)', lines)
         self.assertIn(' A_staticmethod_ref2 = A_staticmethod(y) method of B instance', lines)
-        self.assertIn(' get(key, default=None, /) method of builtins.dict instance', lines)
-        self.assertIn(' dict_get = get(key, default=None, /) method of builtins.dict instance', lines)
+        if not support.MISSING_C_DOCSTRINGS:
+            self.assertIn(' get(key, default=None, /) method of builtins.dict instance', lines)
+            self.assertIn(' dict_get = get(key, default=None, /) method of builtins.dict instance', lines)
+        else:
+            self.assertIn(' get(...) method of builtins.dict instance', lines)
+            self.assertIn(' dict_get = get(...) method of builtins.dict instance', lines)
         # unbound methods
         self.assertIn(' B_method(self)', lines)
         self.assertIn(' B_method2 = B_method(self)', lines)
-        self.assertIn(' count(self, value, /) unbound builtins.list method', lines)
-        self.assertIn(' list_count = count(self, value, /) unbound builtins.list method', lines)
-        self.assertIn(' __repr__(self, /) unbound builtins.object method', lines)
-        self.assertIn(' object_repr = __repr__(self, /) unbound builtins.object method', lines)
+        if not support.MISSING_C_DOCSTRINGS:
+            self.assertIn(' count(self, value, /) unbound builtins.list method', lines)
+            self.assertIn(' list_count = count(self, value, /) unbound builtins.list method', lines)
+            self.assertIn(' __repr__(self, /) unbound builtins.object method', lines)
+            self.assertIn(' object_repr = __repr__(self, /) unbound builtins.object method', lines)
+        else:
+            self.assertIn(' count(self, object, /) unbound builtins.list method', lines)
+            self.assertIn(' list_count = count(self, object, /) unbound builtins.list method', lines)
+            self.assertIn(' __repr__(...) unbound builtins.object method', lines)
+            self.assertIn(' object_repr = __repr__(...) unbound builtins.object method', lines)
+
+        # builtin functions
+        if not support.MISSING_C_DOCSTRINGS:
+            self.assertIn(' sin(x, /)', lines)
+        else:
+            self.assertIn(' sin(object, /)', lines)
 
 
 @unittest.skipIf(
@@ -2016,9 +2175,46 @@ class PydocUrlHandlerTest(PydocBaseTest):
 
 
 class TestHelper(unittest.TestCase):
+    def mock_interactive_session(self, inputs):
+        """
+        Given a list of inputs, run an interactive help session.  Returns a string
+        of what would be shown on screen.
+        """
+        input_iter = iter(inputs)
+
+        def mock_getline(prompt):
+            output.write(prompt)
+            next_input = next(input_iter)
+            output.write(next_input + os.linesep)
+            return next_input
+
+        with captured_stdout() as output:
+            helper = pydoc.Helper(output=output)
+            with unittest.mock.patch.object(helper, "getline", mock_getline):
+                helper.interact()
+
+        # handle different line endings across platforms consistently
+        return output.getvalue().strip().splitlines(keepends=False)
+
     def test_keywords(self):
         self.assertEqual(sorted(pydoc.Helper.keywords),
                          sorted(keyword.kwlist))
+
+    def test_interact_empty_line_continues(self):
+        # gh-138568: test pressing Enter without input should continue in help session
+        self.assertEqual(
+            self.mock_interactive_session(["", "    ", "quit"]),
+            ["help> ", "help>     ", "help> quit"],
+        )
+
+    def test_interact_quit_commands_exit(self):
+        quit_commands = ["quit", "q", "exit"]
+        for quit_cmd in quit_commands:
+            with self.subTest(quit_command=quit_cmd):
+                self.assertEqual(
+                    self.mock_interactive_session([quit_cmd]),
+                    [f"help> {quit_cmd}"],
+                )
 
 
 class PydocWithMetaClasses(unittest.TestCase):

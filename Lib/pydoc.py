@@ -54,6 +54,7 @@ Richard Chamberlain, for the first implementation of textdoc.
 #     the current directory is changed with os.chdir(), an incorrect
 #     path will be displayed.
 
+import ast
 import __future__
 import builtins
 import importlib._bootstrap
@@ -241,7 +242,7 @@ def parentname(object, modname):
     if necessary) or module."""
     if '.' in object.__qualname__:
         name = object.__qualname__.rpartition('.')[0]
-        if object.__module__ != modname:
+        if object.__module__ != modname and object.__module__ is not None:
             return object.__module__ + '.' + name
         else:
             return name
@@ -381,21 +382,29 @@ def ispackage(path):
     return False
 
 def source_synopsis(file):
-    line = file.readline()
-    while line[:1] == '#' or not line.strip():
-        line = file.readline()
-        if not line: break
-    line = line.strip()
-    if line[:4] == 'r"""': line = line[1:]
-    if line[:3] == '"""':
-        line = line[3:]
-        if line[-1:] == '\\': line = line[:-1]
-        while not line.strip():
-            line = file.readline()
-            if not line: break
-        result = line.split('"""')[0].strip()
-    else: result = None
-    return result
+    """Return the one-line summary of a file object, if present"""
+
+    string = ''
+    try:
+        tokens = tokenize.generate_tokens(file.readline)
+        for tok_type, tok_string, _, _, _ in tokens:
+            if tok_type == tokenize.STRING:
+                string += tok_string
+            elif tok_type == tokenize.NEWLINE:
+                with warnings.catch_warnings():
+                    # Ignore the "invalid escape sequence" warning.
+                    warnings.simplefilter("ignore", SyntaxWarning)
+                    docstring = ast.literal_eval(string)
+                if not isinstance(docstring, str):
+                    return None
+                return docstring.strip().split('\n')[0].strip()
+            elif tok_type == tokenize.OP and tok_string in ('(', ')'):
+                string += tok_string
+            elif tok_type not in (tokenize.COMMENT, tokenize.NL, tokenize.ENCODING):
+                return None
+    except (tokenize.TokenError, UnicodeDecodeError, SyntaxError):
+        return None
+    return None
 
 def synopsis(filename, cache={}):
     """Get the one-line summary out of a module file."""
@@ -565,10 +574,20 @@ class Doc:
              (file.startswith(basedir) and
               not file.startswith(os.path.join(basedir, 'site-packages')))) and
             object.__name__ not in ('xml.etree', 'test.test_pydoc.pydoc_mod')):
-            if docloc.startswith(("http://", "https://")):
-                docloc = "{}/{}.html".format(docloc.rstrip("/"), object.__name__.lower())
+
+            try:
+                from pydoc_data import module_docs
+            except ImportError:
+                module_docs = None
+
+            if module_docs and object.__name__ in module_docs.module_docs:
+                doc_name = module_docs.module_docs[object.__name__]
+                if docloc.startswith(("http://", "https://")):
+                    docloc = "{}/{}".format(docloc.rstrip("/"), doc_name)
+                else:
+                    docloc = os.path.join(docloc, doc_name)
             else:
-                docloc = os.path.join(docloc, object.__name__.lower() + ".html")
+                docloc = None
         else:
             docloc = None
         return docloc
@@ -870,6 +889,7 @@ class HTMLDoc(Doc):
         for key, value in inspect.getmembers(object, inspect.isroutine):
             # if __all__ exists, believe it.  Otherwise use a heuristic.
             if (all is not None
+                or inspect.isbuiltin(value)
                 or (inspect.getmodule(value) or object) is object):
                 if visiblename(key, all, object):
                     funcs.append((key, value))
@@ -1314,6 +1334,7 @@ location listed above.
         for key, value in inspect.getmembers(object, inspect.isroutine):
             # if __all__ exists, believe it.  Otherwise use a heuristic.
             if (all is not None
+                or inspect.isbuiltin(value)
                 or (inspect.getmodule(value) or object) is object):
                 if visiblename(key, all, object):
                     funcs.append((key, value))
@@ -2007,10 +2028,11 @@ has the same effect as typing a particular string at the help> prompt.
         while True:
             try:
                 request = self.getline('help> ')
-                if not request: break
             except (KeyboardInterrupt, EOFError):
                 break
             request = request.strip()
+            if not request:
+                continue  # back to the prompt
 
             # Make sure significant trailing quoting marks of literals don't
             # get deleted while cleaning input
@@ -2073,7 +2095,7 @@ enter "q", "quit" or "exit".
 '''.format('%d.%d' % sys.version_info[:2]))
 
     def list(self, items, columns=4, width=80):
-        items = list(sorted(items))
+        items = sorted(items)
         colw = width // columns
         rows = (len(items) + columns - 1) // columns
         for row in range(rows):
@@ -2105,7 +2127,7 @@ to. Enter any symbol to get more help.
 Here is a list of available topics.  Enter any topic name to get more help.
 
 ''')
-        self.list(self.topics.keys())
+        self.list(self.topics.keys(), columns=3)
 
     def showtopic(self, topic, more_xrefs=''):
         try:

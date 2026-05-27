@@ -224,6 +224,28 @@ class PointersTestCase(unittest.TestCase):
     def test_abstract(self):
         self.assertRaises(TypeError, _Pointer.set_type, 42)
 
+    def test_repeated_set_type(self):
+        # Regression test for gh-133290
+        class C(Structure):
+            _fields_ = [('a', c_int)]
+        ptr = POINTER(C)
+        # Read _type_ several times to warm up cache
+        for i in range(5):
+            self.assertIs(ptr._type_, C)
+        ptr.set_type(c_int)
+        self.assertIs(ptr._type_, c_int)
+
+    def test_pointer_proto_missing_argtypes_error(self):
+        class BadType(ctypes._Pointer):
+            # _type_ is intentionally missing
+            pass
+
+        func = ctypes.pythonapi.Py_GetVersion
+        func.argtypes = (BadType,)
+
+        with self.assertRaises(ctypes.ArgumentError):
+            func(object())
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -311,7 +311,7 @@ Pure paths provide the following methods and properties:
 .. attribute:: PurePath.parser
 
    The implementation of the :mod:`os.path` module used for low-level path
-   parsing and joining: either :mod:`posixpath` or :mod:`ntpath`.
+   parsing and joining: either :mod:`!posixpath` or :mod:`!ntpath`.
 
    .. versionadded:: 3.13
 
@@ -1287,6 +1287,10 @@ Reading directories
        PosixPath('setup.py'),
        PosixPath('test_pathlib.py')]
 
+   .. note::
+      The paths are returned in no particular order.
+      If you need a specific order, sort the results.
+
    .. seealso::
       :ref:`pathlib-pattern-language` documentation.
 
@@ -1320,6 +1324,10 @@ Reading directories
 
    Glob the given relative *pattern* recursively.  This is like calling
    :func:`Path.glob` with "``**/``" added in front of the *pattern*.
+
+   .. note::
+      The paths are returned in no particular order.
+      If you need a specific order, sort the results.
 
    .. seealso::
       :ref:`pathlib-pattern-language` and :meth:`Path.glob` documentation.
@@ -1661,9 +1669,12 @@ The following wildcards are supported in patterns for
 ``?``
   Matches one non-separator character.
 ``[seq]``
-  Matches one character in *seq*.
+  Matches one character in *seq*, where *seq* is a sequence of characters.
+  Range expressions are supported; for example, ``[a-z]`` matches any lowercase ASCII letter.
+  Multiple ranges can be combined: ``[a-zA-Z0-9_]`` matches any ASCII letter, digit, or underscore.
+
 ``[!seq]``
-  Matches one character not in *seq*.
+  Matches one character not in *seq*, where *seq* follows the same rules as above.
 
 For a literal match, wrap the meta-characters in brackets.
 For example, ``"[?]"`` matches the character ``"?"``.
