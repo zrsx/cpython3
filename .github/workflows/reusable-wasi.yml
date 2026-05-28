@@ -30,7 +30,7 @@ jobs:
         version: ${{ env.WASMTIME_VERSION }}
     - name: "Restore WASI SDK"
       id: cache-wasi-sdk
-      uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: ${{ env.WASI_SDK_PATH }}
         key: ${{ runner.os }}-wasi-sdk-${{ env.WASI_SDK_VERSION }}
