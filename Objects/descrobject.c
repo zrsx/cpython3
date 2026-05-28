@@ -144,12 +144,12 @@ method_get(PyObject *self, PyObject *obj, PyObject *type)
         return NULL;
     }
     if (descr->d_method->ml_flags & METH_METHOD) {
-        if (PyType_Check(type)) {
+        if (type == NULL || PyType_Check(type)) {
             return PyCMethod_New(descr->d_method, obj, NULL, descr->d_common.d_type);
         } else {
             PyErr_Format(PyExc_TypeError,
                         "descriptor '%V' needs a type, not '%s', as arg 2",
-                        descr_name((PyDescrObject *)descr),
+                        descr_name((PyDescrObject *)descr), "?",
                         Py_TYPE(type)->tp_name);
             return NULL;
         }
@@ -1606,7 +1606,7 @@ property_set_name(PyObject *self, PyObject *args) {
     if (PyTuple_GET_SIZE(args) != 2) {
         PyErr_Format(
                 PyExc_TypeError,
-                "__set_name__() takes 2 positional arguments but %d were given",
+                "__set_name__() takes 2 positional arguments but %zd were given",
                 PyTuple_GET_SIZE(args));
         return NULL;
     }

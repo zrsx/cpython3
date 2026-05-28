@@ -27,10 +27,12 @@
 #include "pycore_setobject.h"     // _PySet_Update()
 #include "pycore_sliceobject.h"   // _PyBuildSlice_ConsumeRefs
 #include "pycore_sysmodule.h"     // _PySys_Audit()
+#include "pycore_traceback.h"     // _PyTraceBack_FromFrame
 #include "pycore_tuple.h"         // _PyTuple_ITEMS()
 #include "pycore_typeobject.h"    // _PySuper_Lookup()
 #include "pycore_uop_ids.h"       // Uops
 #include "pycore_pyerrors.h"
+#include "pycore_sysmodule.h"     // _PySys_GetOptionalAttrString()
 
 #include "pycore_dict.h"
 #include "dictobject.h"
@@ -68,6 +70,7 @@
         } \
         _Py_DECREF_STAT_INC(); \
         if (--op->ob_refcnt == 0) { \
+            _PyReftracerTrack(op, PyRefTracer_DESTROY); \
             destructor dealloc = Py_TYPE(op)->tp_dealloc; \
             (*dealloc)(op); \
         } \
@@ -95,11 +98,7 @@
         } \
         _Py_DECREF_STAT_INC(); \
         if (--op->ob_refcnt == 0) { \
-            struct _reftracer_runtime_state *tracer = &_PyRuntime.ref_tracer; \
-            if (tracer->tracer_func != NULL) { \
-                void* data = tracer->tracer_data; \
-                tracer->tracer_func(op, PyRefTracer_DESTROY, data); \
-            } \
+            _PyReftracerTrack(op, PyRefTracer_DESTROY); \
             destructor d = (destructor)(dealloc); \
             d(op); \
         } \
@@ -269,12 +268,16 @@ void
 Py_SetRecursionLimit(int new_limit)
 {
     PyInterpreterState *interp = _PyInterpreterState_GET();
+    _PyEval_StopTheWorld(interp);
+    HEAD_LOCK(interp->runtime);
     interp->ceval.recursion_limit = new_limit;
     for (PyThreadState *p = interp->threads.head; p != NULL; p = p->next) {
         int depth = p->py_recursion_limit - p->py_recursion_remaining;
         p->py_recursion_limit = new_limit;
         p->py_recursion_remaining = new_limit - depth;
     }
+    HEAD_UNLOCK(interp->runtime);
+    _PyEval_StartTheWorld(interp);
 }
 
 /* The function _Py_EnterRecursiveCallTstate() only calls _Py_CheckRecursiveCall()
@@ -510,7 +513,7 @@ _PyEval_MatchClass(PyThreadState *tstate, PyObject *subject, PyObject *type,
         if (allowed < nargs) {
             const char *plural = (allowed == 1) ? "" : "s";
             _PyErr_Format(tstate, PyExc_TypeError,
-                          "%s() accepts %d positional sub-pattern%s (%d given)",
+                          "%s() accepts %zd positional sub-pattern%s (%zd given)",
                           ((PyTypeObject*)type)->tp_name,
                           allowed, plural, nargs);
             goto fail;
@@ -801,8 +804,10 @@ resume_frame:
         int original_opcode = 0;
         if (tstate->tracing) {
             PyCodeObject *code = _PyFrame_GetCode(frame);
-            original_opcode = code->_co_monitoring->lines[(int)(here - _PyCode_CODE(code))].original_opcode;
-        } else {
+            int index = (int)(here - _PyCode_CODE(code));
+            original_opcode = code->_co_monitoring->lines->data[index*code->_co_monitoring->lines->bytes_per_entry];
+        }
+        else {
             _PyFrame_SetStackPointer(frame, stack_pointer);
             original_opcode = _Py_call_instrumentation_line(
                     tstate, frame, here, prev);
@@ -907,7 +912,11 @@ exception_unwind:
                 int frame_lasti = _PyInterpreterFrame_LASTI(frame);
                 PyObject *lasti = PyLong_FromLong(frame_lasti);
                 if (lasti == NULL) {
-                    goto exception_unwind;
+                    // Instead of going back to exception_unwind (which would cause
+                    // infinite recursion), directly exit to let the original exception
+                    // propagate up and hopefully be handled at a higher level.
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
+                    goto exit_unwind;
                 }
                 PUSH(lasti);
             }
@@ -1174,7 +1183,7 @@ format_missing(PyThreadState *tstate, const char *kind,
     if (name_str == NULL)
         return;
     _PyErr_Format(tstate, PyExc_TypeError,
-                  "%U() missing %i required %s argument%s: %U",
+                  "%U() missing %zd required %s argument%s: %U",
                   qualname,
                   len,
                   kind,
@@ -1687,10 +1696,10 @@ clear_gen_frame(PyThreadState *tstate, _PyInterpreterFrame * frame)
     gen->gi_exc_state.previous_item = NULL;
     tstate->c_recursion_remaining--;
     assert(frame->frame_obj == NULL || frame->frame_obj->f_frame == frame);
+    frame->previous = NULL;
     _PyFrame_ClearExceptCode(frame);
     _PyErr_ClearExcState(&gen->gi_exc_state);
     tstate->c_recursion_remaining++;
-    frame->previous = NULL;
 }
 
 void
@@ -1953,6 +1962,7 @@ do_raise(PyThreadState *tstate, PyObject *exc, PyObject *cause)
                               "calling %R should have returned an instance of "
                               "BaseException, not %R",
                               cause, Py_TYPE(fixed_cause));
+                Py_DECREF(fixed_cause);
                 goto raise_error;
             }
             Py_DECREF(cause);
@@ -2018,6 +2028,20 @@ _PyEval_ExceptionGroupMatch(PyObject* exc_value, PyObject *match_type,
             if (wrapped == NULL) {
                 return -1;
             }
+            PyThreadState *tstate = _PyThreadState_GET();
+            _PyInterpreterFrame *frame = _PyThreadState_GetFrame(tstate);
+            PyFrameObject *f = _PyFrame_GetFrameObject(frame);
+            if (f == NULL) {
+                Py_DECREF(wrapped);
+                return -1;
+            }
+
+            PyObject *tb = _PyTraceBack_FromFrame(NULL, f);
+            if (tb == NULL) {
+                return -1;
+            }
+            PyException_SetTraceback(wrapped, tb);
+            Py_DECREF(tb);
             *match = wrapped;
         }
         *rest = Py_NewRef(Py_None);
@@ -2033,8 +2057,25 @@ _PyEval_ExceptionGroupMatch(PyObject* exc_value, PyObject *match_type,
         if (pair == NULL) {
             return -1;
         }
-        assert(PyTuple_CheckExact(pair));
-        assert(PyTuple_GET_SIZE(pair) == 2);
+
+        if (!PyTuple_CheckExact(pair)) {
+            PyErr_Format(PyExc_TypeError,
+                         "%.200s.split must return a tuple, not %.200s",
+                         Py_TYPE(exc_value)->tp_name, Py_TYPE(pair)->tp_name);
+            Py_DECREF(pair);
+            return -1;
+        }
+
+        // allow tuples of length > 2 for backwards compatibility
+        if (PyTuple_GET_SIZE(pair) < 2) {
+            PyErr_Format(PyExc_TypeError,
+                         "%.200s.split must return a 2-tuple, "
+                         "got tuple of size %zd",
+                         Py_TYPE(exc_value)->tp_name, PyTuple_GET_SIZE(pair));
+            Py_DECREF(pair);
+            return -1;
+        }
+
         *match = Py_NewRef(PyTuple_GET_ITEM(pair, 0));
         *rest = Py_NewRef(PyTuple_GET_ITEM(pair, 1));
         Py_DECREF(pair);
@@ -2234,6 +2275,10 @@ monitor_unwind(PyThreadState *tstate,
     do_monitor_exc(tstate, frame, instr, PY_MONITORING_EVENT_PY_UNWIND);
 }
 
+bool
+_PyEval_NoToolsForUnwind(PyThreadState *tstate) {
+    return no_tools_for_global_event(tstate, PY_MONITORING_EVENT_PY_UNWIND);
+}
 
 static int
 monitor_handled(PyThreadState *tstate,
@@ -2301,21 +2346,10 @@ PyEval_SetProfile(Py_tracefunc func, PyObject *arg)
 void
 PyEval_SetProfileAllThreads(Py_tracefunc func, PyObject *arg)
 {
-    PyThreadState *this_tstate = _PyThreadState_GET();
-    PyInterpreterState* interp = this_tstate->interp;
-
-    _PyRuntimeState *runtime = &_PyRuntime;
-    HEAD_LOCK(runtime);
-    PyThreadState* ts = PyInterpreterState_ThreadHead(interp);
-    HEAD_UNLOCK(runtime);
-
-    while (ts) {
-        if (_PyEval_SetProfile(ts, func, arg) < 0) {
-            PyErr_FormatUnraisable("Exception ignored in PyEval_SetProfileAllThreads");
-        }
-        HEAD_LOCK(runtime);
-        ts = PyThreadState_Next(ts);
-        HEAD_UNLOCK(runtime);
+    PyInterpreterState *interp = _PyInterpreterState_GET();
+    if (_PyEval_SetProfileAllThreads(interp, func, arg) < 0) {
+        /* Log _PySys_Audit() error */
+        PyErr_FormatUnraisable("Exception ignored in PyEval_SetProfileAllThreads");
     }
 }
 
@@ -2332,21 +2366,10 @@ PyEval_SetTrace(Py_tracefunc func, PyObject *arg)
 void
 PyEval_SetTraceAllThreads(Py_tracefunc func, PyObject *arg)
 {
-    PyThreadState *this_tstate = _PyThreadState_GET();
-    PyInterpreterState* interp = this_tstate->interp;
-
-    _PyRuntimeState *runtime = &_PyRuntime;
-    HEAD_LOCK(runtime);
-    PyThreadState* ts = PyInterpreterState_ThreadHead(interp);
-    HEAD_UNLOCK(runtime);
-
-    while (ts) {
-        if (_PyEval_SetTrace(ts, func, arg) < 0) {
-            PyErr_FormatUnraisable("Exception ignored in PyEval_SetTraceAllThreads");
-        }
-        HEAD_LOCK(runtime);
-        ts = PyThreadState_Next(ts);
-        HEAD_UNLOCK(runtime);
+    PyInterpreterState *interp = _PyInterpreterState_GET();
+    if (_PyEval_SetTraceAllThreads(interp, func, arg) < 0) {
+        /* Log _PySys_Audit() error */
+        PyErr_FormatUnraisable("Exception ignored in PyEval_SetTraceAllThreads");
     }
 }
 
@@ -2485,6 +2508,11 @@ PyEval_GetLocals(void)
 
     if (PyFrameLocalsProxy_Check(locals)) {
         PyFrameObject *f = _PyFrame_GetFrameObject(current_frame);
+        if (f == NULL) {
+            Py_DECREF(locals);
+            return NULL;
+        }
+
         PyObject *ret = f->f_locals_cache;
         if (ret == NULL) {
             ret = PyDict_New();
@@ -2776,13 +2804,32 @@ import_from(PyThreadState *tstate, PyObject *v, PyObject *name)
     }
     int is_possibly_shadowing_stdlib = 0;
     if (is_possibly_shadowing) {
-        PyObject *stdlib_modules = PySys_GetObject("stdlib_module_names");
+        PyObject *stdlib_modules;
+        if (_PySys_GetOptionalAttrString("stdlib_module_names", &stdlib_modules) < 0) {
+            goto done;
+        }
         if (stdlib_modules && PyAnySet_Check(stdlib_modules)) {
             is_possibly_shadowing_stdlib = PySet_Contains(stdlib_modules, mod_name_or_unknown);
             if (is_possibly_shadowing_stdlib < 0) {
+                Py_DECREF(stdlib_modules);
                 goto done;
             }
         }
+        Py_XDECREF(stdlib_modules);
+    }
+
+    if (origin == NULL && PyModule_Check(v)) {
+        // Fall back to __file__ for diagnostics if we don't have
+        // an origin that is a location
+        origin = PyModule_GetFilenameObject(v);
+        if (origin == NULL) {
+            if (!PyErr_ExceptionMatches(PyExc_SystemError)) {
+                goto done;
+            }
+            // PyModule_GetFilenameObject raised "module filename missing"
+            _PyErr_Clear(tstate);
+        }
+        assert(origin == NULL || PyUnicode_Check(origin));
     }
 
     if (is_possibly_shadowing_stdlib) {
@@ -2845,9 +2892,11 @@ import_from(PyThreadState *tstate, PyObject *v, PyObject *name)
     }
 
 done_with_errmsg:
-    /* NULL checks for errmsg, mod_name, origin done by PyErr_SetImportError. */
-    _PyErr_SetImportErrorWithNameFrom(errmsg, mod_name, origin, name);
-    Py_DECREF(errmsg);
+    if (errmsg != NULL) {
+        /* NULL checks for mod_name and origin done by _PyErr_SetImportErrorWithNameFrom */
+        _PyErr_SetImportErrorWithNameFrom(errmsg, mod_name, origin, name);
+        Py_DECREF(errmsg);
+    }
 
 done:
     Py_XDECREF(origin);

@@ -11,13 +11,13 @@ import os
 import os.path
 import pathlib
 import re
+import shlex
 import shutil
 import struct
 import subprocess
 import sys
 import sysconfig
 import tempfile
-import shlex
 from test.support import (captured_stdout, captured_stderr,
                           skip_if_broken_multiprocessing_synchronize, verbose,
                           requires_subprocess, is_android, is_apple_mobile,
@@ -26,6 +26,7 @@ from test.support import (captured_stdout, captured_stderr,
                           requires_resource, copy_python_src_ignore)
 from test.support.os_helper import (can_symlink, EnvironmentVarGuard, rmtree,
                                     TESTFN, FakePath)
+from test.support.testcase import ExtraAssertions
 import unittest
 import venv
 from unittest.mock import patch, Mock
@@ -64,7 +65,7 @@ def check_output(cmd, encoding=None):
         )
     return out, err
 
-class BaseTest(unittest.TestCase):
+class BaseTest(unittest.TestCase, ExtraAssertions):
     """Base class for venv tests."""
     maxDiff = 80 * 50
 
@@ -110,10 +111,6 @@ class BaseTest(unittest.TestCase):
         with open(self.get_env_file(*args), 'r', encoding=encoding) as f:
             result = f.read()
         return result
-
-    def assertEndsWith(self, string, tail):
-        if not string.endswith(tail):
-            self.fail(f"String {string!r} does not end with {tail!r}")
 
 class BasicTest(BaseTest):
     """Test venv module functionality."""
@@ -378,6 +375,16 @@ class BasicTest(BaseTest):
             with open(fn, 'wb') as f:
                 f.write(b'Still here?')
 
+    @unittest.skipUnless(hasattr(os, 'listxattr'), 'test requires os.listxattr')
+    def test_install_scripts_selinux(self):
+        """
+        gh-145417: Test that install_scripts does not copy SELinux context
+        when copying scripts.
+        """
+        with patch('os.listxattr') as listxattr_mock:
+            venv.create(self.env_dir)
+            listxattr_mock.assert_not_called()
+
     def test_overwrite_existing(self):
         """
         Test creating environment in an existing directory.
@@ -521,6 +528,8 @@ class BasicTest(BaseTest):
 
     # gh-124651: test quoted strings
     @unittest.skipIf(os.name == 'nt', 'contains invalid characters on Windows')
+    @unittest.skipIf(sys.platform.startswith('netbsd'),
+                     "NetBSD csh fails with quoted special chars; see gh-139308")
     def test_special_chars_csh(self):
         """
         Test that the template strings are quoted properly (csh)

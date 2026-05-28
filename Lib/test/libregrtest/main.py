@@ -6,8 +6,10 @@ import sys
 import sysconfig
 import time
 import trace
+from typing import NoReturn
 
 from test.support import (os_helper, MS_WINDOWS, flush_std_streams,
+                          can_use_suppress_immortalization,
                           suppress_immortalization)
 
 from .cmdline import _parse_args, Namespace
@@ -116,7 +118,7 @@ class Regrtest:
         self.junit_filename: StrPath | None = ns.xmlpath
         self.memory_limit: str | None = ns.memlimit
         self.gc_threshold: int | None = ns.threshold
-        self.use_resources: tuple[str, ...] = tuple(ns.use_resources)
+        self.use_resources: dict[str, str | None] = dict(ns.use_resources)
         if ns.python:
             self.python_cmd: tuple[str, ...] | None = tuple(ns.python)
         else:
@@ -155,7 +157,7 @@ class Regrtest:
         self.next_single_test: TestName | None = None
         self.next_single_filename: StrPath | None = None
 
-    def log(self, line=''):
+    def log(self, line: str = '') -> None:
         self.logger.log(line)
 
     def find_tests(self, tests: TestList | None = None) -> tuple[TestTuple, TestList | None]:
@@ -185,6 +187,12 @@ class Regrtest:
 
         strip_py_suffix(tests)
 
+        exclude_tests = set()
+        if self.exclude:
+            for arg in self.cmdline_args:
+                exclude_tests.add(arg)
+            self.cmdline_args = []
+
         if self.pgo:
             # add default PGO tests if no tests are specified
             setup_pgo_tests(self.cmdline_args, self.pgo_extended)
@@ -192,17 +200,15 @@ class Regrtest:
         if self.tsan:
             setup_tsan_tests(self.cmdline_args)
 
-        exclude_tests = set()
-        if self.exclude:
-            for arg in self.cmdline_args:
-                exclude_tests.add(arg)
-            self.cmdline_args = []
-
         alltests = findtests(testdir=self.test_dir,
                              exclude=exclude_tests)
 
         if not self.fromfile:
             selected = tests or self.cmdline_args
+            if exclude_tests:
+                # Support "--pgo/--tsan -x test_xxx" command
+                selected = [name for name in selected
+                            if name not in exclude_tests]
             if selected:
                 selected = split_test_packages(selected)
             else:
@@ -233,11 +239,11 @@ class Regrtest:
         return (tuple(selected), tests)
 
     @staticmethod
-    def list_tests(tests: TestTuple):
+    def list_tests(tests: TestTuple) -> None:
         for name in tests:
             print(name)
 
-    def _rerun_failed_tests(self, runtests: RunTests):
+    def _rerun_failed_tests(self, runtests: RunTests) -> RunTests:
         # Configure the runner to re-run tests
         if self.num_workers == 0 and not self.single_process:
             # Always run tests in fresh processes to have more deterministic
@@ -269,7 +275,7 @@ class Regrtest:
             self.run_tests_sequentially(runtests)
         return runtests
 
-    def rerun_failed_tests(self, runtests: RunTests):
+    def rerun_failed_tests(self, runtests: RunTests) -> None:
         if self.python_cmd:
             # Temp patch for https://github.com/python/cpython/issues/94052
             self.log(
@@ -338,7 +344,7 @@ class Regrtest:
             if not self._run_bisect(runtests, name, progress):
                 return
 
-    def display_result(self, runtests):
+    def display_result(self, runtests: RunTests) -> None:
         # If running the test suite for PGO then no one cares about results.
         if runtests.pgo:
             return
@@ -368,7 +374,7 @@ class Regrtest:
 
         return result
 
-    def run_tests_sequentially(self, runtests) -> None:
+    def run_tests_sequentially(self, runtests: RunTests) -> None:
         if self.coverage:
             tracer = trace.Trace(trace=False, count=True)
         else:
@@ -386,15 +392,11 @@ class Regrtest:
             msg += " (timeout: %s)" % format_duration(runtests.timeout)
         self.log(msg)
 
-        previous_test = None
         tests_iter = runtests.iter_tests()
         for test_index, test_name in enumerate(tests_iter, 1):
             start_time = time.perf_counter()
 
-            text = test_name
-            if previous_test:
-                text = '%s -- %s' % (text, previous_test)
-            self.logger.display_progress(test_index, text)
+            self.logger.display_progress(test_index, test_name)
 
             result = self.run_test(test_name, runtests, tracer)
 
@@ -411,21 +413,16 @@ class Regrtest:
                 except (KeyError, AttributeError):
                     pass
 
+            text = str(result)
+            test_time = time.perf_counter() - start_time
+            if test_time >= PROGRESS_MIN_TIME:
+                text = f"{text} in {format_duration(test_time)}"
+            self.logger.display_progress(test_index, text)
+
             if result.must_stop(self.fail_fast, self.fail_env_changed):
                 break
 
-            previous_test = str(result)
-            test_time = time.perf_counter() - start_time
-            if test_time >= PROGRESS_MIN_TIME:
-                previous_test = "%s in %s" % (previous_test, format_duration(test_time))
-            elif result.state == State.PASSED:
-                # be quiet: say nothing if the test passed shortly
-                previous_test = None
-
-        if previous_test:
-            print(previous_test)
-
-    def get_state(self):
+    def get_state(self) -> str:
         state = self.results.get_state(self.fail_env_changed)
         if self.first_state:
             state = f'{self.first_state} then {state}'
@@ -474,7 +471,7 @@ class Regrtest:
         state = self.get_state()
         print(f"Result: {state}")
 
-    def create_run_tests(self, tests: TestTuple):
+    def create_run_tests(self, tests: TestTuple) -> RunTests:
         return RunTests(
             tests,
             fail_fast=self.fail_fast,
@@ -527,8 +524,6 @@ class Regrtest:
         self.first_runtests = runtests
         self.logger.set_tests(runtests)
 
-        setup_process()
-
         if (runtests.hunt_refleak is not None) and (not self.num_workers):
             # gh-109739: WindowsLoadTracker thread interferes with refleak check
             use_load_tracker = False
@@ -542,8 +537,16 @@ class Regrtest:
             if self.num_workers:
                 self._run_tests_mp(runtests, self.num_workers)
             else:
+                # gh-135734: suppress_immortalization() raises SkipTest
+                # if _testinternalcapi is missing and the -R option is set.
+                if not can_use_suppress_immortalization(runtests.hunt_refleak):
+                    print("Module '_testinternalcapi' is missing. "
+                          "Did you disable it with --disable-test-modules?",
+                          file=sys.stderr)
+                    raise SystemExit(1)
+
                 # gh-117783: don't immortalize deferred objects when tracking
-                # refleaks. Only releveant for the free-threaded build.
+                # refleaks. Only relevant for the free-threaded build.
                 with suppress_immortalization(runtests.hunt_refleak):
                     self.run_tests_sequentially(runtests)
 
@@ -631,16 +634,24 @@ class Regrtest:
         return (environ, keep_environ)
 
     def _add_ci_python_opts(self, python_opts, keep_environ):
-        # --fast-ci and --slow-ci add options to Python:
-        # "-u -W default -bb -E"
+        # --fast-ci and --slow-ci add options to Python.
+        #
+        # Some platforms run tests in embedded mode and cannot change options
+        # after startup, so if this function changes, consider also updating:
+        #  * gradle_task in Android/android.py
 
-        # Unbuffered stdout and stderr
-        if not sys.stdout.write_through:
+        # Unbuffered stdout and stderr. This isn't helpful on Android, because
+        # it would cause lines to be split into multiple log messages.
+        if not sys.stdout.write_through and sys.platform != "android":
             python_opts.append('-u')
 
-        # Add warnings filter 'default'
-        if 'default' not in sys.warnoptions:
-            python_opts.extend(('-W', 'default'))
+        # Add warnings filter 'error', unless the user specified a different
+        # filter. Ignore BytesWarning since it's controlled by '-b' below.
+        if not [
+            opt for opt in sys.warnoptions
+            if not opt.endswith("::BytesWarning")
+        ]:
+            python_opts.extend(('-W', 'error'))
 
         # Error on bytes/str comparison
         if sys.flags.bytes_warning < 2:
@@ -658,8 +669,12 @@ class Regrtest:
 
         cmd_text = shlex.join(cmd)
         try:
-            print(f"+ {cmd_text}", flush=True)
+            # Android and iOS run tests in embedded mode. To update their
+            # Python options, see the comment in _add_ci_python_opts.
+            if not cmd[0]:
+                raise ValueError("No Python executable is present")
 
+            print(f"+ {cmd_text}", flush=True)
             if hasattr(os, 'execv') and not MS_WINDOWS:
                 os.execv(cmd[0], cmd)
                 # On success, execv() do no return.
@@ -685,9 +700,9 @@ class Regrtest:
                           f"Command: {cmd_text}")
             # continue executing main()
 
-    def _add_python_opts(self):
-        python_opts = []
-        regrtest_opts = []
+    def _add_python_opts(self) -> None:
+        python_opts: list[str] = []
+        regrtest_opts: list[str] = []
 
         environ, keep_environ = self._add_cross_compile_opts(regrtest_opts)
         if self.ci_mode:
@@ -708,10 +723,7 @@ class Regrtest:
         self._execute_python(cmd, environ)
 
     def _init(self):
-        # Set sys.stdout encoder error handler to backslashreplace,
-        # similar to sys.stderr error handler, to avoid UnicodeEncodeError
-        # when printing a traceback or any other non-encodable character.
-        sys.stdout.reconfigure(errors="backslashreplace")
+        setup_process()
 
         if self.junit_filename and not os.path.isabs(self.junit_filename):
             self.junit_filename = os.path.abspath(self.junit_filename)
@@ -728,7 +740,7 @@ class Regrtest:
             )
         return self._tmp_dir
 
-    def main(self, tests: TestList | None = None):
+    def main(self, tests: TestList | None = None) -> NoReturn:
         if self.want_add_python_opts:
             self._add_python_opts()
 
@@ -757,7 +769,7 @@ class Regrtest:
         sys.exit(exitcode)
 
 
-def main(tests=None, _add_python_opts=False, **kwargs):
+def main(tests=None, _add_python_opts=False, **kwargs) -> NoReturn:
     """Run the Python suite."""
     ns = _parse_args(sys.argv[1:], **kwargs)
     Regrtest(ns, _add_python_opts=_add_python_opts).main(tests=tests)

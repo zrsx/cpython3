@@ -72,8 +72,8 @@
 //   def _Py_atomic_load_ptr_acquire(obj):
 //       return obj  # acquire
 //
-//   def _Py_atomic_store_ptr_release(obj):
-//       return obj  # release
+//   def _Py_atomic_store_ptr_release(obj, value):
+//       obj = value  # release
 //
 //   def _Py_atomic_fence_seq_cst():
 //       # sequential consistency
@@ -529,15 +529,15 @@ static inline void _Py_atomic_fence_release(void);
 
 #if _Py_USE_GCC_BUILTIN_ATOMICS
 #  define Py_ATOMIC_GCC_H
-#  include "cpython/pyatomic_gcc.h"
+#  include "pyatomic_gcc.h"
 #  undef Py_ATOMIC_GCC_H
 #elif __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
 #  define Py_ATOMIC_STD_H
-#  include "cpython/pyatomic_std.h"
+#  include "pyatomic_std.h"
 #  undef Py_ATOMIC_STD_H
 #elif defined(_MSC_VER)
 #  define Py_ATOMIC_MSC_H
-#  include "cpython/pyatomic_msc.h"
+#  include "pyatomic_msc.h"
 #  undef Py_ATOMIC_MSC_H
 #else
 #  error "no available pyatomic implementation for this platform/compiler"

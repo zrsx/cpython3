@@ -11,7 +11,9 @@
 #include "pycore_pystate.h"       // _PyInterpreterState_GetIDObject()
 
 #ifdef MS_WINDOWS
-#define WIN32_LEAN_AND_MEAN
+#ifndef WIN32_LEAN_AND_MEAN
+#  define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>        // SwitchToThread()
 #elif defined(HAVE_SCHED_H)
 #include <sched.h>          // sched_yield()
@@ -560,7 +562,7 @@ _channelitem_clear_data(_channelitem *item, int removed)
 {
     if (item->data != NULL) {
         // It was allocated in channel_send().
-        (void)_release_xid_data(item->data, XID_IGNORE_EXC & XID_FREE);
+        (void)_release_xid_data(item->data, XID_IGNORE_EXC | XID_FREE);
         item->data = NULL;
     }
 
@@ -1624,14 +1626,16 @@ _channels_list_all(_channels *channels, int64_t *count)
     if (ids == NULL) {
         goto done;
     }
-    _channelref *ref = channels->head;
-    for (int64_t i=0; ref != NULL; ref = ref->next, i++) {
-        ids[i] = (struct channel_id_and_info){
-            .id = ref->cid,
-            .unboundop = ref->chan->defaults.unboundop,
-        };
+    int64_t i = 0;
+    for (_channelref *ref = channels->head; ref != NULL; ref = ref->next) {
+        if (ref->chan != NULL) {
+            ids[i++] = (struct channel_id_and_info){
+                .id = ref->cid,
+                .unboundop = ref->chan->defaults.unboundop,
+            };
+        }
     }
-    *count = channels->numopen;
+    *count = i;
 
     cids = ids;
 done:
@@ -3554,8 +3558,7 @@ module_traverse(PyObject *mod, visitproc visit, void *arg)
 {
     module_state *state = get_module_state(mod);
     assert(state != NULL);
-    traverse_module_state(state, visit, arg);
-    return 0;
+    return traverse_module_state(state, visit, arg);
 }
 
 static int
@@ -3565,8 +3568,7 @@ module_clear(PyObject *mod)
     assert(state != NULL);
 
     // Now we clear the module state.
-    clear_module_state(state);
-    return 0;
+    return clear_module_state(state);
 }
 
 static void

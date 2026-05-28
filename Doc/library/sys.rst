@@ -8,7 +8,7 @@
 
 This module provides access to some variables used or maintained by the
 interpreter and to functions that interact strongly with the interpreter. It is
-always available.
+always available. Unless explicitly noted otherwise, all variables are read-only.
 
 
 .. data:: abiflags
@@ -508,7 +508,7 @@ always available.
    in the range 0--127, and produce undefined results otherwise.  Some systems
    have a convention for assigning specific meanings to specific exit codes, but
    these are generally underdeveloped; Unix programs generally use 2 for command
-   line syntax errors and 1 for all other kind of errors.  If another type of
+   line syntax errors and 1 for all other kinds of errors.  If another type of
    object is passed, ``None`` is equivalent to passing zero, and any other
    object is printed to :data:`stderr` and results in an exit code of 1.  In
    particular, ``sys.exit("some error message")`` is a quick way to exit a
@@ -764,8 +764,8 @@ always available.
 
 .. function:: getdefaultencoding()
 
-   Return the name of the current default string encoding used by the Unicode
-   implementation.
+   Return ``'utf-8'``. This is the name of the default string encoding, used
+   in methods like :meth:`str.encode`.
 
 
 .. function:: getdlopenflags()
@@ -883,7 +883,7 @@ always available.
 
 .. function:: getswitchinterval()
 
-   Return the interpreter's "thread switch interval"; see
+   Return the interpreter's "thread switch interval" in seconds; see
    :func:`setswitchinterval`.
 
    .. versionadded:: 3.2
@@ -918,6 +918,8 @@ always available.
 
       This function should be used for internal and specialized purposes only.
       It is not guaranteed to exist in all implementations of Python.
+
+   .. versionadded:: 3.12
 
 
 .. function:: getobjects(limit[, type])
@@ -1094,10 +1096,14 @@ always available.
 
       The size of the seed key of the hash algorithm
 
+   .. attribute:: hash_info.cutoff
+
+      Cutoff for small string DJBX33A optimization in range ``[1, cutoff)``.
+
    .. versionadded:: 3.2
 
    .. versionchanged:: 3.4
-      Added *algorithm*, *hash_bits* and *seed_bits*
+      Added *algorithm*, *hash_bits*, *seed_bits*, and *cutoff*.
 
 
 .. data:: hexversion
@@ -1235,6 +1241,9 @@ always available.
 
    .. versionadded:: 3.13
 
+   .. impl-detail::
+
+      It is not guaranteed to exist in all implementations of Python.
 
 .. function:: is_finalizing()
 
@@ -1621,7 +1630,7 @@ always available.
    :func:`settrace` for each thread being debugged or use :func:`threading.settrace`.
 
    Trace functions should have three arguments: *frame*, *event*, and
-   *arg*. *frame* is the current stack frame.  *event* is a string: ``'call'``,
+   *arg*. *frame* is the :ref:`current stack frame <frame-objects>`. *event* is a string: ``'call'``,
    ``'line'``, ``'return'``, ``'exception'`` or ``'opcode'``.  *arg* depends on
    the event type.
 

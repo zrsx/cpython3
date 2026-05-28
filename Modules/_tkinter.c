@@ -31,6 +31,7 @@ Copyright (C) 1994 Steen Lumholt.
 #endif
 
 #include "pycore_long.h"          // _PyLong_IsNegative()
+#include "pycore_sysmodule.h"     // _PySys_GetOptionalAttrString()
 
 #ifdef MS_WINDOWS
 #  include <windows.h>
@@ -142,8 +143,9 @@ _get_tcl_lib_path(void)
     if (already_checked == 0) {
         struct stat stat_buf;
         int stat_return_value;
+        PyObject *prefix;
 
-        PyObject *prefix = PySys_GetObject("base_prefix");  // borrowed reference
+        (void) _PySys_GetOptionalAttrString("base_prefix", &prefix);
         if (prefix == NULL) {
             return NULL;
         }
@@ -151,9 +153,11 @@ _get_tcl_lib_path(void)
         /* Check expected location for an installed Python first */
         tcl_library_path = PyUnicode_FromString("\\tcl\\tcl" TCL_VERSION);
         if (tcl_library_path == NULL) {
+            Py_DECREF(prefix);
             return NULL;
         }
         tcl_library_path = PyUnicode_Concat(prefix, tcl_library_path);
+        Py_DECREF(prefix);
         if (tcl_library_path == NULL) {
             return NULL;
         }
@@ -582,8 +586,12 @@ Tkapp_New(const char *screenName, const char *className,
 
     v->interp = Tcl_CreateInterp();
     v->wantobjects = wantobjects;
+#if TCL_MAJOR_VERSION >= 9
+    v->threaded = 1;
+#else
     v->threaded = Tcl_GetVar2Ex(v->interp, "tcl_platform", "threaded",
                                 TCL_GLOBAL_ONLY) != NULL;
+#endif
     v->thread_id = Tcl_GetCurrentThread();
     v->dispatching = 0;
     v->trace = NULL;
@@ -938,6 +946,40 @@ asBignumObj(PyObject *value)
     return result;
 }
 
+static Tcl_Obj* AsObj(PyObject *value);
+
+static Tcl_Obj*
+TupleAsObj(PyObject *value, int wrapped)
+{
+    Tcl_Obj *result = NULL;
+    Py_ssize_t size = PyTuple_GET_SIZE(value);
+    if (size == 0) {
+        return Tcl_NewListObj(0, NULL);
+    }
+    if (!CHECK_SIZE(size, sizeof(Tcl_Obj *))) {
+        PyErr_SetString(PyExc_OverflowError,
+                        wrapped ? "list is too long" : "tuple is too long");
+        return NULL;
+    }
+    Tcl_Obj **argv = (Tcl_Obj **)PyMem_Malloc(((size_t)size) * sizeof(Tcl_Obj *));
+    if (argv == NULL) {
+      PyErr_NoMemory();
+      return NULL;
+    }
+    for (Py_ssize_t i = 0; i < size; i++) {
+        Tcl_Obj *item = AsObj(PyTuple_GET_ITEM(value, i));
+        if (item == NULL) {
+            goto exit;
+        }
+        argv[i] = item;
+    }
+    result = Tcl_NewListObj((int)size, argv);
+
+exit:
+    PyMem_Free(argv);
+    return result;
+}
+
 static Tcl_Obj*
 AsObj(PyObject *value)
 {
@@ -984,28 +1026,17 @@ AsObj(PyObject *value)
     if (PyFloat_Check(value))
         return Tcl_NewDoubleObj(PyFloat_AS_DOUBLE(value));
 
-    if (PyTuple_Check(value) || PyList_Check(value)) {
-        Tcl_Obj **argv;
-        Py_ssize_t size, i;
+    if (PyTuple_Check(value)) {
+        return TupleAsObj(value, false);
+    }
 
-        size = PySequence_Fast_GET_SIZE(value);
-        if (size == 0)
-            return Tcl_NewListObj(0, NULL);
-        if (!CHECK_SIZE(size, sizeof(Tcl_Obj *))) {
-            PyErr_SetString(PyExc_OverflowError,
-                            PyTuple_Check(value) ? "tuple is too long" :
-                                                   "list is too long");
+    if (PyList_Check(value)) {
+        PyObject *value_as_tuple = PyList_AsTuple(value);
+        if (value_as_tuple == NULL) {
             return NULL;
         }
-        argv = (Tcl_Obj **) PyMem_Malloc(((size_t)size) * sizeof(Tcl_Obj *));
-        if (!argv) {
-          PyErr_NoMemory();
-          return NULL;
-        }
-        for (i = 0; i < size; i++)
-          argv[i] = AsObj(PySequence_Fast_GET_ITEM(value,i));
-        result = Tcl_NewListObj((int)size, argv);
-        PyMem_Free(argv);
+        result = TupleAsObj(value_as_tuple, true);
+        Py_DECREF(value_as_tuple);
         return result;
     }
 
@@ -3485,9 +3516,10 @@ PyInit__tkinter(void)
 
     /* This helps the dynamic loader; in Unicode aware Tcl versions
        it also helps Tcl find its encodings. */
-    uexe = PySys_GetObject("executable");  // borrowed reference
+    (void) _PySys_GetOptionalAttrString("executable", &uexe);
     if (uexe && PyUnicode_Check(uexe)) {   // sys.executable can be None
         cexe = PyUnicode_EncodeFSDefault(uexe);
+        Py_DECREF(uexe);
         if (cexe) {
 #ifdef MS_WINDOWS
             int set_var = 0;
@@ -3500,12 +3532,14 @@ PyInit__tkinter(void)
             if (!ret && GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
                 str_path = _get_tcl_lib_path();
                 if (str_path == NULL && PyErr_Occurred()) {
+                    Py_DECREF(cexe);
                     Py_DECREF(m);
                     return NULL;
                 }
                 if (str_path != NULL) {
                     wcs_path = PyUnicode_AsWideCharString(str_path, NULL);
                     if (wcs_path == NULL) {
+                        Py_DECREF(cexe);
                         Py_DECREF(m);
                         return NULL;
                     }
@@ -3525,6 +3559,9 @@ PyInit__tkinter(void)
 #endif /* MS_WINDOWS */
         }
         Py_XDECREF(cexe);
+    }
+    else {
+        Py_XDECREF(uexe);
     }
 
     if (PyErr_Occurred()) {

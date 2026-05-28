@@ -2,7 +2,7 @@
 
 
 ====================
-Coroutines and Tasks
+Coroutines and tasks
 ====================
 
 This section outlines high-level asyncio APIs to work with coroutines
@@ -231,7 +231,7 @@ A good example of a low-level function that returns a Future object
 is :meth:`loop.run_in_executor`.
 
 
-Creating Tasks
+Creating tasks
 ==============
 
 **Source code:** :source:`Lib/asyncio/tasks.py`
@@ -291,7 +291,7 @@ Creating Tasks
       Added the *context* parameter.
 
 
-Task Cancellation
+Task cancellation
 =================
 
 Tasks can easily and safely be cancelled.
@@ -315,7 +315,7 @@ remove the cancellation state.
 
 .. _taskgroups:
 
-Task Groups
+Task groups
 ===========
 
 Task groups combine a task creation API with a convenient
@@ -414,7 +414,7 @@ reported by :meth:`asyncio.Task.cancelling`.
    Improved handling of simultaneous internal and external cancellations
    and correct preservation of cancellation counts.
 
-Terminating a Task Group
+Terminating a task group
 ------------------------
 
 While terminating a task group is not natively supported by the standard
@@ -464,7 +464,8 @@ Expected output:
 Sleeping
 ========
 
-.. coroutinefunction:: sleep(delay, result=None)
+.. function:: sleep(delay, result=None)
+   :async:
 
    Block for *delay* seconds.
 
@@ -484,13 +485,13 @@ Sleeping
    for 5 seconds::
 
     import asyncio
-    import datetime
+    import datetime as dt
 
     async def display_date():
         loop = asyncio.get_running_loop()
         end_time = loop.time() + 5.0
         while True:
-            print(datetime.datetime.now())
+            print(dt.datetime.now())
             if (loop.time() + 1.0) >= end_time:
                 break
             await asyncio.sleep(1)
@@ -505,7 +506,7 @@ Sleeping
       Raises :exc:`ValueError` if *delay* is :data:`~math.nan`.
 
 
-Running Tasks Concurrently
+Running tasks concurrently
 ==========================
 
 .. awaitablefunction:: gather(*aws, return_exceptions=False)
@@ -543,7 +544,7 @@ Running Tasks Concurrently
       provides stronger safety guarantees than *gather* for scheduling a nesting of subtasks:
       if a task (or a subtask, a task scheduled by a task)
       raises an exception, *TaskGroup* will, while *gather* will not,
-      cancel the remaining scheduled tasks).
+      cancel the remaining scheduled tasks.
 
    .. _asyncio_example_gather:
 
@@ -607,7 +608,7 @@ Running Tasks Concurrently
 
 .. _eager-task-factory:
 
-Eager Task Factory
+Eager task factory
 ==================
 
 .. function:: eager_task_factory(loop, coro, *, name=None, context=None)
@@ -650,7 +651,7 @@ Eager Task Factory
     .. versionadded:: 3.12
 
 
-Shielding From Cancellation
+Shielding from cancellation
 ===========================
 
 .. awaitablefunction:: shield(aw)
@@ -757,6 +758,9 @@ Timeouts
        An :ref:`asynchronous context manager <async-context-managers>`
        for cancelling overdue coroutines.
 
+       Prefer using :func:`asyncio.timeout` or :func:`asyncio.timeout_at`
+       rather than instantiating :class:`!Timeout` directly.
+
        ``when`` should be an absolute time at which the context should time out,
        as measured by the event loop's clock:
 
@@ -819,7 +823,8 @@ Timeouts
 
    .. versionadded:: 3.11
 
-.. coroutinefunction:: wait_for(aw, timeout)
+.. function:: wait_for(aw, timeout)
+   :async:
 
    Wait for the *aw* :ref:`awaitable <asyncio-awaitables>`
    to complete with a timeout.
@@ -876,10 +881,11 @@ Timeouts
       Raises :exc:`TimeoutError` instead of :exc:`asyncio.TimeoutError`.
 
 
-Waiting Primitives
+Waiting primitives
 ==================
 
-.. coroutinefunction:: wait(aws, *, timeout=None, return_when=ALL_COMPLETED)
+.. function:: wait(aws, *, timeout=None, return_when=ALL_COMPLETED)
+   :async:
 
    Run :class:`~asyncio.Future` and :class:`~asyncio.Task` instances in the *aws*
    iterable concurrently and block until the condition specified
@@ -995,10 +1001,11 @@ Waiting Primitives
       or as a plain :term:`iterator` (previously it was only a plain iterator).
 
 
-Running in Threads
+Running in threads
 ==================
 
-.. coroutinefunction:: to_thread(func, /, *args, **kwargs)
+.. function:: to_thread(func, /, *args, **kwargs)
+   :async:
 
    Asynchronously run function *func* in a separate thread.
 
@@ -1054,7 +1061,7 @@ Running in Threads
    .. versionadded:: 3.9
 
 
-Scheduling From Other Threads
+Scheduling from other threads
 =============================
 
 .. function:: run_coroutine_threadsafe(coro, loop)
@@ -1131,8 +1138,9 @@ Introspection
 
    .. versionadded:: 3.4
 
+.. _asyncio-task-obj:
 
-Task Object
+Task object
 ===========
 
 .. class:: Task(coro, *, loop=None, name=None, context=None, eager_start=False)
@@ -1332,7 +1340,10 @@ Task Object
 
       Request the Task to be cancelled.
 
-      This arranges for a :exc:`CancelledError` exception to be thrown
+      If the Task is already *done* or *cancelled*, return ``False``,
+      otherwise, return ``True``.
+
+      The method arranges for a :exc:`CancelledError` exception to be thrown
       into the wrapped coroutine on the next cycle of the event loop.
 
       The coroutine then has a chance to clean up or even deny the

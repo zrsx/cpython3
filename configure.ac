@@ -205,7 +205,7 @@ AC_SUBST([FREEZE_MODULE_DEPS])
 AC_SUBST([PYTHON_FOR_BUILD_DEPS])
 
 AC_CHECK_PROGS([PYTHON_FOR_REGEN],
-  [python$PACKAGE_VERSION python3.13 python3.12 python3.11 python3.10 python3 python],
+  [python$PACKAGE_VERSION python3.15 python 3.14 python3.13 python3.12 python3.11 python3.10 python3 python],
   [python3])
 AC_SUBST([PYTHON_FOR_REGEN])
 
@@ -2137,7 +2137,10 @@ case "$CC_BASENAME" in
         fi
         ;;
       *)
-        PGO_PROF_GEN_FLAG="-fprofile-generate"
+        AX_CHECK_COMPILE_FLAG(
+            [-fprofile-update=atomic],
+            [PGO_PROF_GEN_FLAG="-fprofile-generate -fprofile-update=atomic"],
+            [PGO_PROF_GEN_FLAG="-fprofile-generate"])
         PGO_PROF_USE_FLAG="-fprofile-use -fprofile-correction"
         LLVM_PROF_MERGER="true"
         LLVM_PROF_FILE=""
@@ -2215,13 +2218,34 @@ AS_VAR_IF([enable_shared], [yes], [
 ])
 
 AC_ARG_VAR(
+  [BOLT_COMMON_FLAGS],
+  [Common arguments to llvm-bolt when instrumenting and applying]
+)
+
+AC_MSG_CHECKING([BOLT_COMMON_FLAGS])
+if test -z "${BOLT_COMMON_FLAGS}"
+then
+  AS_VAR_SET(
+    [BOLT_COMMON_FLAGS],
+    [m4_normalize("
+      [-update-debug-sections]
+
+      dnl At least LLVM 19.x doesn't support computed gotos in PIC compiled code.
+      dnl Exclude functions containing computed gotos.
+      dnl TODO this may be fixed in LLVM 20.x via https://github.com/llvm/llvm-project/pull/120267.
+      [-skip-funcs=_PyEval_EvalFrameDefault,sre_ucs1_match/1,sre_ucs2_match/1,sre_ucs4_match/1]
+    ")]
+  )
+fi
+
+AC_ARG_VAR(
   [BOLT_INSTRUMENT_FLAGS],
   [Arguments to llvm-bolt when instrumenting binaries]
 )
 AC_MSG_CHECKING([BOLT_INSTRUMENT_FLAGS])
 if test -z "${BOLT_INSTRUMENT_FLAGS}"
 then
-  BOLT_INSTRUMENT_FLAGS=
+  BOLT_INSTRUMENT_FLAGS="${BOLT_COMMON_FLAGS}"
 fi
 AC_MSG_RESULT([$BOLT_INSTRUMENT_FLAGS])
 
@@ -2235,9 +2259,9 @@ then
   AS_VAR_SET(
     [BOLT_APPLY_FLAGS],
     [m4_normalize("
-     -update-debug-sections
+     ${BOLT_COMMON_FLAGS}
      -reorder-blocks=ext-tsp
-     -reorder-functions=hfsort+
+     -reorder-functions=cdsort
      -split-functions
      -icf=1
      -inline-all
@@ -2985,7 +3009,7 @@ AC_CHECK_HEADERS([ \
   linux/tipc.h linux/wait.h netdb.h net/ethernet.h netinet/in.h netpacket/packet.h poll.h process.h pthread.h pty.h \
   sched.h setjmp.h shadow.h signal.h spawn.h stropts.h sys/audioio.h sys/bsdtty.h sys/devpoll.h \
   sys/endian.h sys/epoll.h sys/event.h sys/eventfd.h sys/file.h sys/ioctl.h sys/kern_control.h \
-  sys/loadavg.h sys/lock.h sys/memfd.h sys/mkdev.h sys/mman.h sys/modem.h sys/param.h sys/poll.h \
+  sys/loadavg.h sys/lock.h sys/memfd.h sys/mkdev.h sys/mman.h sys/modem.h sys/param.h sys/pidfd.h sys/poll.h \
   sys/random.h sys/resource.h sys/select.h sys/sendfile.h sys/socket.h sys/soundcard.h sys/stat.h \
   sys/statvfs.h sys/sys_domain.h sys/syscall.h sys/sysmacros.h sys/termio.h sys/time.h sys/times.h sys/timerfd.h \
   sys/types.h sys/uio.h sys/un.h sys/utsname.h sys/wait.h sys/xattr.h sysexits.h syslog.h \
@@ -3719,15 +3743,17 @@ dnl check for uuid dependencies
 AH_TEMPLATE([HAVE_UUID_H], [Define to 1 if you have the <uuid.h> header file.])
 AH_TEMPLATE([HAVE_UUID_UUID_H], [Define to 1 if you have the <uuid/uuid.h> header file.])
 AH_TEMPLATE([HAVE_UUID_GENERATE_TIME_SAFE], [Define if uuid_generate_time_safe() exists.])
+AH_TEMPLATE([HAVE_UUID_GENERATE_TIME_SAFE_STABLE_MAC], [Define if uuid_generate_time_safe() is able to deduce a MAC address.])
 have_uuid=missing
 
 dnl AIX provides support for RFC4122 (uuid) in libc.a starting with AIX 6.1
 dnl (anno 2007). FreeBSD and OpenBSD provides support in libc as well.
 dnl Little-endian FreeBSD, OpenBSD and NetBSD needs encoding into an octet
 dnl stream in big-endian byte-order
-AC_CHECK_HEADERS([uuid.h],
-  [AC_CHECK_FUNCS([uuid_create uuid_enc_be],
-    [have_uuid=yes
+AC_CHECK_HEADERS([uuid.h], [
+  AC_CHECK_FUNCS([uuid_create uuid_enc_be], [
+    have_uuid=yes
+    ac_cv_have_uuid_h=yes
     LIBUUID_CFLAGS=${LIBUUID_CFLAGS-""}
     LIBUUID_LIBS=${LIBUUID_LIBS-""}
   ])
@@ -3737,19 +3763,29 @@ AS_VAR_IF([have_uuid], [missing], [
   PKG_CHECK_MODULES(
     [LIBUUID], [uuid >= 2.20],
       [dnl linux-util's libuuid has uuid_generate_time_safe() since v2.20 (2011)
-      dnl and provides <uuid.h>.
+      dnl and provides <uuid.h> assuming specific include paths are given
       have_uuid=yes
-      AC_DEFINE([HAVE_UUID_H], [1])
-      AC_DEFINE([HAVE_UUID_GENERATE_TIME_SAFE], [1])
+      ac_cv_have_uuid_generate_time_safe=yes
+      # The uuid.h file to include may be <uuid.h> *or* <uuid/uuid.h>.
+      # Since pkg-config --cflags uuid may return -I/usr/include/uuid,
+      # it's possible to write '#include <uuid.h>' in _uuidmodule.c,
+      # assuming that the compiler flags are properly updated.
+      #
+      # Ideally, we should have defined HAVE_UUID_H if and only if
+      # #include <uuid.h> can be written, *without* assuming extra
+      # include path.
+      ac_cv_have_uuid_h=yes
     ], [
       WITH_SAVE_ENV([
         CPPFLAGS="$CPPFLAGS $LIBUUID_CFLAGS"
-        LDFLAGS="$LDFLAGS $LIBUUID_LIBS"
+        LIBS="$LIBS $LIBUUID_LIBS"
         AC_CHECK_HEADERS([uuid/uuid.h], [
+          ac_cv_have_uuid_uuid_h=yes
           PY_CHECK_LIB([uuid], [uuid_generate_time], [have_uuid=yes])
-          PY_CHECK_LIB([uuid], [uuid_generate_time_safe],
-            [have_uuid=yes
-            AC_DEFINE([HAVE_UUID_GENERATE_TIME_SAFE], [1]) ]) ])
+          PY_CHECK_LIB([uuid], [uuid_generate_time_safe], [
+            have_uuid=yes
+            ac_cv_have_uuid_generate_time_safe=yes
+          ])])
         AS_VAR_IF([have_uuid], [yes], [
           LIBUUID_CFLAGS=${LIBUUID_CFLAGS-""}
           LIBUUID_LIBS=${LIBUUID_LIBS-"-luuid"}
@@ -3764,13 +3800,89 @@ AS_VAR_IF([have_uuid], [missing], [
   AC_CHECK_HEADERS([uuid/uuid.h], [
     AC_CHECK_FUNC([uuid_generate_time], [
       have_uuid=yes
+      ac_cv_have_uuid_uuid_h=yes
       LIBUUID_CFLAGS=${LIBUUID_CFLAGS-""}
       LIBUUID_LIBS=${LIBUUID_LIBS-""}
     ])
   ])
 ])
 
+AS_VAR_IF([ac_cv_have_uuid_h], [yes], [AC_DEFINE([HAVE_UUID_H], [1])])
+AS_VAR_IF([ac_cv_have_uuid_uuid_h], [yes], [AC_DEFINE([HAVE_UUID_UUID_H], [1])])
+AS_VAR_IF([ac_cv_have_uuid_generate_time_safe], [yes], [
+  AC_DEFINE([HAVE_UUID_GENERATE_TIME_SAFE], [1])
+])
+
+# gh-124228: While the libuuid library is available on NetBSD, it supports only UUID version 4.
+# This restriction inhibits the proper generation of time-based UUIDs.
+if test "$ac_sys_system" = "NetBSD"; then
+  have_uuid=missing
+  AC_DEFINE([HAVE_UUID_H], [0])
+fi
+
 AS_VAR_IF([have_uuid], [missing], [have_uuid=no])
+
+# gh-132710: The UUID node is fetched by using libuuid when possible
+# and cached. While the node is constant within the same process,
+# different interpreters may have different values as libuuid may
+# randomize the node value if the latter cannot be deduced.
+#
+# Consumers may define HAVE_UUID_GENERATE_TIME_SAFE_STABLE_MAC
+# to indicate that libuuid is unstable and should not be relied
+# upon to deduce the MAC address.
+AC_DEFUN([PY_EXTRACT_UUID_GENERATE_TIME_SAFE_MAC], [WITH_SAVE_ENV([
+  # Be sure to add the extra include path if we used pkg-config
+  # as HAVE_UUID_H may be set even though <uuid.h> is only reachable
+  # by adding extra -I flags.
+  #
+  # If the following script does not compile, we simply assume that
+  # libuuid is missing.
+  CFLAGS="$CFLAGS $LIBUUID_CFLAGS"
+  LIBS="$LIBS $LIBUUID_LIBS"
+  AC_RUN_IFELSE([AC_LANG_SOURCE([[
+    #include <inttypes.h>   // PRIu64
+    #include <stdint.h>     // uint64_t
+    #include <stdio.h>      // fopen(), fclose()
+
+    #ifdef HAVE_UUID_H
+    #include <uuid.h>
+    #else
+    #include <uuid/uuid.h>
+    #endif
+
+    #define ERR 1
+    int main(void) {
+        uuid_t uuid;  // unsigned char[16]
+        (void)uuid_generate_time_safe(uuid);
+        uint64_t node = 0;
+        for (size_t i = 0; i < 6; i++) {
+            node |= (uint64_t)uuid[15 - i] << (8 * i);
+        }
+        FILE *fp = fopen("conftest.out", "w");
+        if (fp == NULL) {
+            return ERR;
+        }
+        int rc = fprintf(fp, "%" PRIu64 "\n", node) >= 0;
+        rc |= fclose(fp);
+        return rc == 0 ? 0 : ERR;
+    }]])], [
+      AS_VAR_SET([$1], [`cat conftest.out`])
+    ], [], []
+  )])])
+
+if test "$have_uuid" = "yes" -a "$HAVE_UUID_GENERATE_TIME_SAFE" = "1"
+then
+  AC_MSG_CHECKING([if uuid_generate_time_safe() node value is stable])
+  PY_EXTRACT_UUID_GENERATE_TIME_SAFE_MAC([py_cv_uuid_node1])
+  PY_EXTRACT_UUID_GENERATE_TIME_SAFE_MAC([py_cv_uuid_node2])
+  if test -n "$py_cv_uuid_node1" -a "$py_cv_uuid_node1" = "$py_cv_uuid_node2"
+  then
+    AC_DEFINE([HAVE_UUID_GENERATE_TIME_SAFE_STABLE_MAC], [1])
+    AC_MSG_RESULT([stable])
+  else
+    AC_MSG_RESULT([unstable])
+  fi
+fi
 
 # 'Real Time' functions on Solaris
 # posix4 on Solaris 2.6
@@ -3978,7 +4090,7 @@ AS_VAR_IF([have_libffi], [missing], [
   PKG_CHECK_MODULES([LIBFFI], [libffi], [have_libffi=yes], [
     WITH_SAVE_ENV([
       CPPFLAGS="$CPPFLAGS $LIBFFI_CFLAGS"
-      LDFLAGS="$LDFLAGS $LIBFFI_LIBS"
+      LIBS="$LIBS $LIBFFI_LIBS"
       AC_CHECK_HEADER([ffi.h], [
         AC_CHECK_LIB([ffi], [ffi_call], [
           have_libffi=yes
@@ -4012,8 +4124,8 @@ AS_VAR_IF([have_libffi], [yes], [
   AS_VAR_IF([ac_cv_lib_dl_dlopen], [yes], [AS_VAR_APPEND([LIBFFI_LIBS], [" -ldl"])])
 
   WITH_SAVE_ENV([
-    CFLAGS="$LIBFFI_CFLAGS $CFLAGS"
-    LDFLAGS="$LIBFFI_LIBS $LDFLAGS"
+    CFLAGS="$CFLAGS $LIBFFI_CFLAGS"
+    LIBS="$LIBS $LIBFFI_LIBS"
 
     PY_CHECK_FUNC([ffi_prep_cif_var], [@%:@include <ffi.h>])
     PY_CHECK_FUNC([ffi_prep_closure_loc], [@%:@include <ffi.h>])
@@ -4051,8 +4163,8 @@ AS_VAR_IF(
 
 AS_VAR_IF([with_system_libmpdec], [yes],
   [WITH_SAVE_ENV([
-    CPPFLAGS="$LIBMPDEC_CFLAGS $CPPFLAGS"
-    LIBS="$LIBMPDEC_LIBS $LIBS"
+    CPPFLAGS="$CPPFLAGS $LIBMPDEC_CFLAGS"
+    LIBS="$LIBS $LIBMPDEC_LIBS"
 
     AC_LINK_IFELSE([
       AC_LANG_PROGRAM([
@@ -4065,13 +4177,13 @@ AS_VAR_IF([with_system_libmpdec], [yes],
       [have_mpdec=no])
   ])],
   [AC_MSG_WARN([m4_normalize([
-     the bundled copy of libmpdecimal is scheduled for removal in Python 3.15;
+     the bundled copy of libmpdec is scheduled for removal in Python 3.16;
      consider using a system installed mpdecimal library.])])])
 
 AS_IF([test "$with_system_libmpdec" = "yes" && test "$have_mpdec" = "no"],
       [AC_MSG_WARN([m4_normalize([
-         no system libmpdecimal found; falling back to bundled libmpdecimal
-         (deprecated and scheduled for removal in Python 3.15)])])
+         no system libmpdec found; falling back to bundled libmpdec
+         (deprecated and scheduled for removal in Python 3.16)])])
        USE_BUNDLED_LIBMPDEC()])
 
 # Disable forced inlining in debug builds, see GH-94847
@@ -4185,7 +4297,7 @@ WITH_SAVE_ENV([
 dnl bpo-45774/GH-29507: The CPP check in AC_CHECK_HEADER can fail on FreeBSD,
 dnl hence CPPFLAGS instead of CFLAGS.
   CPPFLAGS="$CPPFLAGS $LIBSQLITE3_CFLAGS"
-  LDFLAGS="$LIBSQLITE3_LIBS $LDFLAGS"
+  LIBS="$LIBS $LIBSQLITE3_LIBS"
 
   AC_CHECK_HEADER([sqlite3.h], [
     have_sqlite3=yes
@@ -4288,7 +4400,7 @@ AS_CASE([$ac_sys_system],
 
 WITH_SAVE_ENV([
   CPPFLAGS="$CPPFLAGS $TCLTK_CFLAGS"
-  LIBS="$TCLTK_LIBS $LDFLAGS"
+  LIBS="$LIBS $TCLTK_LIBS"
 
   AC_LINK_IFELSE([
     AC_LANG_PROGRAM([
@@ -4330,7 +4442,7 @@ AC_ARG_VAR([GDBM_CFLAGS], [C compiler flags for gdbm])
 AC_ARG_VAR([GDBM_LIBS], [additional linker flags for gdbm])
 WITH_SAVE_ENV([
   CPPFLAGS="$CPPFLAGS $GDBM_CFLAGS"
-  LDFLAGS="$GDBM_LIBS $LDFLAGS"
+  LIBS="$LIBS $GDBM_LIBS"
   AC_CHECK_HEADERS([gdbm.h], [
     AC_CHECK_LIB([gdbm], [gdbm_open], [
       have_gdbm=yes
@@ -4990,16 +5102,33 @@ then
     # linked into the binary. Correspondingly, dtrace(1) is missing the ELF
     # generation flag '-G'. We check for presence of this flag, rather than
     # hardcoding support by OS, in the interest of robustness.
+    #
+    # NetBSD DTrace requires the -x nolibs flag to avoid system library conflicts
+    # and uses header generation for testing instead of object generation.
     AC_CACHE_CHECK([whether DTrace probes require linking],
-        [ac_cv_dtrace_link], [dnl
+        [ac_cv_dtrace_link], [
             ac_cv_dtrace_link=no
             echo 'BEGIN{}' > conftest.d
-            "$DTRACE" $DFLAGS -G -s conftest.d -o conftest.o > /dev/null 2>&1 && \
+            case $host in
+                *netbsd*)
+                    DTRACE_TEST_FLAGS="-x nolibs -h"
+                    ;;
+                *)
+                    DTRACE_TEST_FLAGS="-G"
+                    ;;
+            esac
+            "$DTRACE" $DFLAGS $DTRACE_TEST_FLAGS -s conftest.d -o conftest.o > /dev/null 2>&1 && \
                 ac_cv_dtrace_link=yes
       ])
     if test "$ac_cv_dtrace_link" = "yes"; then
         DTRACE_OBJS="Python/pydtrace.o"
     fi
+    # Set NetBSD-specific DTrace flags in DFLAGS
+    case $host in
+        *netbsd*)
+            DFLAGS="$DFLAGS -x nolibs"
+            ;;
+    esac
 fi
 
 dnl Platform-specific C and header files.
@@ -5095,7 +5224,7 @@ AC_CHECK_FUNCS([ \
   faccessat fchmod fchmodat fchown fchownat fdopendir fdwalk fexecve \
   fork fork1 fpathconf fstatat ftime ftruncate futimens futimes futimesat \
   gai_strerror getegid geteuid getgid getgrent getgrgid getgrgid_r \
-  getgrnam_r getgrouplist gethostname getitimer getloadavg getlogin \
+  getgrnam_r getgrouplist gethostname getitimer getloadavg getlogin getlogin_r \
   getpeername getpgid getpid getppid getpriority _getpty \
   getpwent getpwnam_r getpwuid getpwuid_r getresgid getresuid getrusage getsid getspent \
   getspnam getuid getwd grantpt if_nameindex initgroups kill killpg lchown linkat \
@@ -5113,7 +5242,7 @@ AC_CHECK_FUNCS([ \
   sigfillset siginterrupt sigpending sigrelse sigtimedwait sigwait \
   sigwaitinfo snprintf splice strftime strlcpy strsignal symlinkat sync \
   sysconf tcgetpgrp tcsetpgrp tempnam timegm times tmpfile \
-  tmpnam tmpnam_r truncate ttyname umask uname unlinkat unlockpt utimensat utimes vfork \
+  tmpnam tmpnam_r truncate ttyname_r umask uname unlinkat unlockpt utimensat utimes vfork \
   wait wait3 wait4 waitid waitpid wcscoll wcsftime wcsxfrm wmemcmp writev \
 ])
 
@@ -5288,7 +5417,7 @@ PKG_CHECK_MODULES([ZLIB], [zlib >= 1.2.0], [
 ], [
   WITH_SAVE_ENV([
     CPPFLAGS="$CPPFLAGS $ZLIB_CFLAGS"
-    LDFLAGS="$LDFLAGS $ZLIB_LIBS"
+    LIBS="$LIBS $ZLIB_LIBS"
     AC_CHECK_HEADERS([zlib.h], [
       PY_CHECK_LIB([z], [gzread], [have_zlib=yes], [have_zlib=no])
     ], [have_zlib=no])
@@ -5312,7 +5441,7 @@ PY_CHECK_EMSCRIPTEN_PORT([BZIP2], [-sUSE_BZIP2])
 PKG_CHECK_MODULES([BZIP2], [bzip2], [have_bzip2=yes], [
   WITH_SAVE_ENV([
     CPPFLAGS="$CPPFLAGS $BZIP2_CFLAGS"
-    LDFLAGS="$LDFLAGS $BZIP2_LIBS"
+    LIBS="$LIBS $BZIP2_LIBS"
     AC_CHECK_HEADERS([bzlib.h], [
       AC_CHECK_LIB([bz2], [BZ2_bzCompress], [have_bzip2=yes], [have_bzip2=no])
     ], [have_bzip2=no])
@@ -5326,7 +5455,7 @@ PKG_CHECK_MODULES([BZIP2], [bzip2], [have_bzip2=yes], [
 PKG_CHECK_MODULES([LIBLZMA], [liblzma], [have_liblzma=yes], [
   WITH_SAVE_ENV([
     CPPFLAGS="$CPPFLAGS $LIBLZMA_CFLAGS"
-    LDFLAGS="$LDFLAGS $LIBLZMA_LIBS"
+    LIBS="$LIBS $LIBLZMA_LIBS"
     AC_CHECK_HEADERS([lzma.h], [
       AC_CHECK_LIB([lzma], [lzma_easy_encoder], [have_liblzma=yes], [have_liblzma=no])
     ], [have_liblzma=no])
@@ -5378,6 +5507,18 @@ PY_CHECK_FUNC([setgroups], [
 #include <grp.h>
 #endif
 ])
+
+AC_CHECK_DECL([MAXLOGNAME],
+              [AC_DEFINE([HAVE_MAXLOGNAME], [1],
+                         [Define if you have the 'MAXLOGNAME' constant.])],
+              [],
+              [@%:@include <sys/param.h>])
+
+AC_CHECK_DECLS([UT_NAMESIZE],
+              [AC_DEFINE([HAVE_UT_NAMESIZE], [1],
+                         [Define if you have the 'HAVE_UT_NAMESIZE' constant.])],
+              [],
+              [@%:@include <utmp.h>])
 
 # check for openpty, login_tty, and forkpty
 
@@ -5902,8 +6043,8 @@ AS_VAR_IF([ac_cv_gcc_asm_for_x87], [yes], [
 AC_CACHE_CHECK([whether we can use gcc inline assembler to get and set mc68881 fpcr], [ac_cv_gcc_asm_for_mc68881], [
 AC_LINK_IFELSE(   [AC_LANG_PROGRAM([[]], [[
   unsigned int fpcr;
-  __asm__ __volatile__ ("fmove.l %%fpcr,%0" : "=g" (fpcr));
-  __asm__ __volatile__ ("fmove.l %0,%%fpcr" : : "g" (fpcr));
+  __asm__ __volatile__ ("fmove.l %%fpcr,%0" : "=dm" (fpcr));
+  __asm__ __volatile__ ("fmove.l %0,%%fpcr" : : "dm" (fpcr));
 ]])],[ac_cv_gcc_asm_for_mc68881=yes],[ac_cv_gcc_asm_for_mc68881=no])
 ])
 AS_VAR_IF([ac_cv_gcc_asm_for_mc68881], [yes], [
@@ -6318,7 +6459,7 @@ AS_VAR_IF([with_readline], [readline], [
   ], [
     WITH_SAVE_ENV([
       CPPFLAGS="$CPPFLAGS $LIBREADLINE_CFLAGS"
-      LDFLAGS="$LDFLAGS $LIBREADLINE_LIBS"
+      LIBS="$LIBS $LIBREADLINE_LIBS"
       AC_CHECK_HEADERS([readline/readline.h], [
         AC_CHECK_LIB([readline], [readline], [
           LIBREADLINE=readline
@@ -6339,7 +6480,7 @@ AS_VAR_IF([with_readline], [edit], [
   ], [
     WITH_SAVE_ENV([
       CPPFLAGS="$CPPFLAGS $LIBEDIT_CFLAGS"
-      LDFLAGS="$LDFLAGS $LIBEDIT_LIBS"
+      LIBS="$LIBS $LIBEDIT_LIBS"
       AC_CHECK_HEADERS([editline/readline.h], [
         AC_CHECK_LIB([edit], [readline], [
           LIBREADLINE=edit
@@ -6363,7 +6504,7 @@ AS_VAR_IF([with_readline], [no], [
 
   WITH_SAVE_ENV([
     CPPFLAGS="$CPPFLAGS $READLINE_CFLAGS"
-    LIBS="$READLINE_LIBS $LIBS"
+    LIBS="$LIBS $READLINE_LIBS"
     LIBS_SAVE=$LIBS
 
     m4_define([readline_includes], [

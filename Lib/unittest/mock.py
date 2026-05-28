@@ -628,7 +628,9 @@ class NonCallableMock(Base):
     side_effect = property(__get_side_effect, __set_side_effect)
 
 
-    def reset_mock(self, visited=None, *, return_value=False, side_effect=False):
+    def reset_mock(self, visited=None, *,
+                   return_value: bool = False,
+                   side_effect: bool = False):
         "Restore the mock object to its initial state."
         if visited is None:
             visited = []
@@ -1172,14 +1174,20 @@ class CallableMixin(Base):
 
     def _increment_mock_call(self, /, *args, **kwargs):
         self.called = True
-        self.call_count += 1
 
         # handle call_args
         # needs to be set here so assertions on call arguments pass before
         # execution in the case of awaited calls
-        _call = _Call((args, kwargs), two=True)
-        self.call_args = _call
-        self.call_args_list.append(_call)
+        with NonCallableMock._lock:
+            # Lock is used here so that call_args_list and call_count are
+            # set atomically otherwise it is possible that by the time call_count
+            # is set another thread may have appended to call_args_list.
+            # The rest of this function relies on list.append being atomic and
+            # skips locking.
+            _call = _Call((args, kwargs), two=True)
+            self.call_args = _call
+            self.call_args_list.append(_call)
+            self.call_count = len(self.call_args_list)
 
         # initial stuff for method_calls:
         do_method_calls = self._mock_parent is not None
@@ -2228,7 +2236,7 @@ class MagicMock(MagicMixin, Mock):
         self._mock_add_spec(spec, spec_set)
         self._mock_set_magics()
 
-    def reset_mock(self, /, *args, return_value=False, **kwargs):
+    def reset_mock(self, /, *args, return_value: bool = False, **kwargs):
         if (
             return_value
             and self._mock_name

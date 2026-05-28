@@ -5,7 +5,6 @@ Tkinter Dialogs
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. module:: tkinter.simpledialog
-   :platform: Tk
    :synopsis: Simple dialog windows
 
 **Source code:** :source:`Lib/tkinter/simpledialog.py`
@@ -43,7 +42,6 @@ functions for creating simple modal dialogs to get a value from the user.
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. module:: tkinter.filedialog
-   :platform: Tk
    :synopsis: Dialog classes for file selection
 
 **Source code:** :source:`Lib/tkinter/filedialog.py`
@@ -208,7 +206,6 @@ These do not emulate the native look-and-feel of the platform.
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. module:: tkinter.commondialog
-   :platform: Tk
    :synopsis: Tkinter base class for dialogs
 
 **Source code:** :source:`Lib/tkinter/commondialog.py`
@@ -220,7 +217,7 @@ is the base class for dialogs defined in other supporting modules.
 
 .. class:: Dialog(master=None, **options)
 
-   .. method:: show(color=None, **options)
+   .. method:: show(**options)
 
       Render the Dialog window.
 

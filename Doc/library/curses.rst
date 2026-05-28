@@ -4,7 +4,6 @@
 .. module:: curses
    :synopsis: An interface to the curses library, providing portable
               terminal handling.
-   :platform: Unix
 
 .. sectionauthor:: Moshe Zadka <moshez@zadka.site.co.il>
 .. sectionauthor:: Eric Raymond <esr@thyrsus.com>
@@ -22,6 +21,8 @@ designed to match the API of ncurses, an open-source curses library hosted on
 Linux and the BSD variants of Unix.
 
 .. include:: ../includes/wasm-mobile-notavail.rst
+
+.. availability:: Unix.
 
 .. note::
 
@@ -703,8 +704,10 @@ The module :mod:`curses` defines the following functions:
 Window Objects
 --------------
 
-Window objects, as returned by :func:`initscr` and :func:`newwin` above, have
-the following methods and attributes:
+.. class:: window
+
+   Window objects, as returned by :func:`initscr` and :func:`newwin` above, have
+   the following methods and attributes:
 
 
 .. method:: window.addch(ch[, attr])
@@ -757,7 +760,7 @@ the following methods and attributes:
 
 .. method:: window.attron(attr)
 
-   Add attribute *attr* from the "background" set applied to all writes to the
+   Add attribute *attr* to the "background" set applied to all writes to the
    current window.
 
 
@@ -1326,7 +1329,6 @@ The :mod:`curses` module defines the following data members:
 
 
 .. data:: version
-.. data:: __version__
 
    A bytes object representing the current version of the module.
 

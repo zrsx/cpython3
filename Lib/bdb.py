@@ -3,6 +3,7 @@
 import fnmatch
 import sys
 import os
+from contextlib import contextmanager
 from inspect import CO_GENERATOR, CO_COROUTINE, CO_ASYNC_GENERATOR
 
 __all__ = ["BdbQuit", "Bdb", "Breakpoint"]
@@ -36,6 +37,8 @@ class Bdb:
         self.frame_returning = None
         self.trace_opcodes = False
         self.enterframe = None
+        self.cmdframe = None
+        self.cmdlineno = None
 
         self._load_breaks()
 
@@ -63,6 +66,12 @@ class Bdb:
         self.botframe = None
         self._set_stopinfo(None, None)
 
+    @contextmanager
+    def set_enterframe(self, frame):
+        self.enterframe = frame
+        yield
+        self.enterframe = None
+
     def trace_dispatch(self, frame, event, arg):
         """Dispatch a trace function for debugged frames based on the event.
 
@@ -88,28 +97,27 @@ class Bdb:
         The arg parameter depends on the previous event.
         """
 
-        self.enterframe = frame
-
-        if self.quitting:
-            return # None
-        if event == 'line':
-            return self.dispatch_line(frame)
-        if event == 'call':
-            return self.dispatch_call(frame, arg)
-        if event == 'return':
-            return self.dispatch_return(frame, arg)
-        if event == 'exception':
-            return self.dispatch_exception(frame, arg)
-        if event == 'c_call':
+        with self.set_enterframe(frame):
+            if self.quitting:
+                return # None
+            if event == 'line':
+                return self.dispatch_line(frame)
+            if event == 'call':
+                return self.dispatch_call(frame, arg)
+            if event == 'return':
+                return self.dispatch_return(frame, arg)
+            if event == 'exception':
+                return self.dispatch_exception(frame, arg)
+            if event == 'c_call':
+                return self.trace_dispatch
+            if event == 'c_exception':
+                return self.trace_dispatch
+            if event == 'c_return':
+                return self.trace_dispatch
+            if event == 'opcode':
+                return self.dispatch_opcode(frame, arg)
+            print('bdb.Bdb.dispatch: unknown debugging event:', repr(event))
             return self.trace_dispatch
-        if event == 'c_exception':
-            return self.trace_dispatch
-        if event == 'c_return':
-            return self.trace_dispatch
-        if event == 'opcode':
-            return self.dispatch_opcode(frame, arg)
-        print('bdb.Bdb.dispatch: unknown debugging event:', repr(event))
-        return self.trace_dispatch
 
     def dispatch_line(self, frame):
         """Invoke user function and return trace function for line event.
@@ -118,7 +126,12 @@ class Bdb:
         self.user_line(). Raise BdbQuit if self.quitting is set.
         Return self.trace_dispatch to continue tracing in this scope.
         """
-        if self.stop_here(frame) or self.break_here(frame):
+        # GH-136057
+        # For line events, we don't want to stop at the same line where
+        # the latest next/step command was issued.
+        if (self.stop_here(frame) or self.break_here(frame)) and not (
+            self.cmdframe == frame and self.cmdlineno == frame.f_lineno
+        ):
             self.user_line(frame)
             if self.quitting: raise BdbQuit
         return self.trace_dispatch
@@ -310,7 +323,8 @@ class Bdb:
                     break
                 frame = frame.f_back
 
-    def _set_stopinfo(self, stopframe, returnframe, stoplineno=0, opcode=False):
+    def _set_stopinfo(self, stopframe, returnframe, stoplineno=0, opcode=False,
+                      cmdframe=None, cmdlineno=None):
         """Set the attributes for stopping.
 
         If stoplineno is greater than or equal to 0, then stop at line
@@ -323,6 +337,10 @@ class Bdb:
         # stoplineno >= 0 means: stop at line >= the stoplineno
         # stoplineno -1 means: don't stop at all
         self.stoplineno = stoplineno
+        # cmdframe/cmdlineno is the frame/line number when the user issued
+        # step/next commands.
+        self.cmdframe = cmdframe
+        self.cmdlineno = cmdlineno
         self._set_trace_opcodes(opcode)
 
     def _set_caller_tracefunc(self, current_frame):
@@ -348,7 +366,9 @@ class Bdb:
 
     def set_step(self):
         """Stop after one line of code."""
-        self._set_stopinfo(None, None)
+        # set_step() could be called from signal handler so enterframe might be None
+        self._set_stopinfo(None, None, cmdframe=self.enterframe,
+                           cmdlineno=getattr(self.enterframe, 'f_lineno', None))
 
     def set_stepinstr(self):
         """Stop before the next instruction."""
@@ -356,7 +376,7 @@ class Bdb:
 
     def set_next(self, frame):
         """Stop on the next line in or below the given frame."""
-        self._set_stopinfo(frame, None)
+        self._set_stopinfo(frame, None, cmdframe=frame, cmdlineno=frame.f_lineno)
 
     def set_return(self, frame):
         """Stop when returning from the given frame."""
@@ -373,15 +393,15 @@ class Bdb:
         if frame is None:
             frame = sys._getframe().f_back
         self.reset()
-        self.enterframe = frame
-        while frame:
-            frame.f_trace = self.trace_dispatch
-            self.botframe = frame
-            self.frame_trace_lines_opcodes[frame] = (frame.f_trace_lines, frame.f_trace_opcodes)
-            # We need f_trace_lines == True for the debugger to work
-            frame.f_trace_lines = True
-            frame = frame.f_back
-        self.set_stepinstr()
+        with self.set_enterframe(frame):
+            while frame:
+                frame.f_trace = self.trace_dispatch
+                self.botframe = frame
+                self.frame_trace_lines_opcodes[frame] = (frame.f_trace_lines, frame.f_trace_opcodes)
+                # We need f_trace_lines == True for the debugger to work
+                frame.f_trace_lines = True
+                frame = frame.f_back
+            self.set_stepinstr()
         sys.settrace(self.trace_dispatch)
 
     def set_continue(self):

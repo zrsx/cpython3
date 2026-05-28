@@ -11,6 +11,7 @@
 #include "pycore_bytesobject.h"   // _PyBytesWriter
 #include "pycore_long.h"          // _PyLong_AsByteArray()
 #include "pycore_moduleobject.h"  // _PyModule_GetState()
+#include "pycore_weakref.h"       // FT_CLEAR_WEAKREFS()
 
 #include <stddef.h>               // offsetof()
 
@@ -767,14 +768,13 @@ np_halffloat(_structmodulestate *state, char *p, PyObject *v, const formatdef *f
 static int
 np_float(_structmodulestate *state, char *p, PyObject *v, const formatdef *f)
 {
-    float x = (float)PyFloat_AsDouble(v);
+    double x = PyFloat_AsDouble(v);
     if (x == -1 && PyErr_Occurred()) {
         PyErr_SetString(state->StructError,
                         "required argument is not a float");
         return -1;
     }
-    memcpy(p, (char *)&x, sizeof x);
-    return 0;
+    return PyFloat_Pack4(x, p, PY_LITTLE_ENDIAN);
 }
 
 static int
@@ -1419,11 +1419,11 @@ align(Py_ssize_t size, char c, const formatdef *e)
 /* calculate the size of a format string */
 
 static int
-prepare_s(PyStructObject *self)
+prepare_s(PyStructObject *self, PyObject *format)
 {
     const formatdef *f;
     const formatdef *e;
-    formatcode *codes;
+    formatcode *codes, *codes0;
 
     const char *s;
     const char *fmt;
@@ -1433,8 +1433,8 @@ prepare_s(PyStructObject *self)
 
     _structmodulestate *state = get_struct_state_structinst(self);
 
-    fmt = PyBytes_AS_STRING(self->s_format);
-    if (strlen(fmt) != (size_t)PyBytes_GET_SIZE(self->s_format)) {
+    fmt = PyBytes_AS_STRING(format);
+    if (strlen(fmt) != (size_t)PyBytes_GET_SIZE(format)) {
         PyErr_SetString(state->StructError,
                         "embedded null character");
         return -1;
@@ -1475,9 +1475,23 @@ prepare_s(PyStructObject *self)
 
         switch (c) {
             case 's': /* fall through */
-            case 'p': len++; ncodes++; break;
+            case 'p':
+                if (len == PY_SSIZE_T_MAX) {
+                    goto overflow;
+                }
+                len++;
+                ncodes++;
+                break;
             case 'x': break;
-            default: len += num; if (num) ncodes++; break;
+            default:
+                if (num > PY_SSIZE_T_MAX - len) {
+                    goto overflow;
+                }
+                len += num;
+                if (num) {
+                    ncodes++;
+                }
+                break;
         }
 
         itemsize = e->size;
@@ -1497,18 +1511,12 @@ prepare_s(PyStructObject *self)
         return -1;
     }
 
-    self->s_size = size;
-    self->s_len = len;
     codes = PyMem_Malloc((ncodes + 1) * sizeof(formatcode));
     if (codes == NULL) {
         PyErr_NoMemory();
         return -1;
     }
-    /* Free any s_codes value left over from a previous initialization. */
-    if (self->s_codes != NULL)
-        PyMem_Free(self->s_codes);
-    self->s_codes = codes;
-
+    codes0 = codes;
     s = fmt;
     size = 0;
     while ((c = *s++) != '\0') {
@@ -1547,6 +1555,14 @@ prepare_s(PyStructObject *self)
     codes->offset = size;
     codes->size = 0;
     codes->repeat = 0;
+
+    /* Free any s_codes value left over from a previous initialization. */
+    if (self->s_codes != NULL)
+        PyMem_Free(self->s_codes);
+    self->s_codes = codes0;
+    self->s_size = size;
+    self->s_len = len;
+    Py_XSETREF(self->s_format, Py_NewRef(format));
 
     return 0;
 
@@ -1613,9 +1629,8 @@ Struct___init___impl(PyStructObject *self, PyObject *format)
         return -1;
     }
 
-    Py_SETREF(self->s_format, format);
-
-    ret = prepare_s(self);
+    ret = prepare_s(self, format);
+    Py_DECREF(format);
     return ret;
 }
 
@@ -1639,8 +1654,7 @@ s_dealloc(PyStructObject *s)
 {
     PyTypeObject *tp = Py_TYPE(s);
     PyObject_GC_UnTrack(s);
-    if (s->weakreflist != NULL)
-        PyObject_ClearWeakRefs((PyObject *)s);
+    FT_CLEAR_WEAKREFS((PyObject *)s, s->weakreflist);
     if (s->s_codes != NULL) {
         PyMem_Free(s->s_codes);
     }
@@ -1695,6 +1709,14 @@ fail:
     return NULL;
 }
 
+#define ENSURE_STRUCT_IS_READY(self)                             \
+    do {                                                         \
+        if (!(self)->s_codes) {                                  \
+            PyErr_SetString(PyExc_RuntimeError,                  \
+                            "Struct object is not initialized"); \
+            return NULL;                                         \
+        }                                                        \
+    } while (0);
 
 /*[clinic input]
 Struct.unpack
@@ -1715,7 +1737,7 @@ Struct_unpack_impl(PyStructObject *self, Py_buffer *buffer)
 /*[clinic end generated code: output=873a24faf02e848a input=3113f8e7038b2f6c]*/
 {
     _structmodulestate *state = get_struct_state_structinst(self);
-    assert(self->s_codes != NULL);
+    ENSURE_STRUCT_IS_READY(self);
     if (buffer->len != self->s_size) {
         PyErr_Format(state->StructError,
                      "unpack requires a buffer of %zd bytes",
@@ -1747,7 +1769,7 @@ Struct_unpack_from_impl(PyStructObject *self, Py_buffer *buffer,
 /*[clinic end generated code: output=57fac875e0977316 input=cafd4851d473c894]*/
 {
     _structmodulestate *state = get_struct_state_structinst(self);
-    assert(self->s_codes != NULL);
+    ENSURE_STRUCT_IS_READY(self);
 
     if (offset < 0) {
         if (offset + self->s_size > 0) {
@@ -1890,8 +1912,7 @@ Struct_iter_unpack(PyStructObject *self, PyObject *buffer)
 {
     _structmodulestate *state = get_struct_state_structinst(self);
     unpackiterobject *iter;
-
-    assert(self->s_codes != NULL);
+    ENSURE_STRUCT_IS_READY(self);
 
     if (self->s_size == 0) {
         PyErr_Format(state->StructError,
@@ -2032,8 +2053,8 @@ s_pack(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
 
     /* Validate arguments. */
     soself = (PyStructObject *)self;
+    ENSURE_STRUCT_IS_READY(soself);
     assert(PyStruct_Check(self, state));
-    assert(soself->s_codes != NULL);
     if (nargs != soself->s_len)
     {
         PyErr_Format(state->StructError,
@@ -2077,8 +2098,8 @@ s_pack_into(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
 
     /* Validate arguments.  +1 is for the first arg as buffer. */
     soself = (PyStructObject *)self;
+    ENSURE_STRUCT_IS_READY(soself);
     assert(PyStruct_Check(self, state));
-    assert(soself->s_codes != NULL);
     if (nargs != (soself->s_len + 2))
     {
         if (nargs == 0) {
@@ -2164,6 +2185,7 @@ s_pack_into(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
 static PyObject *
 s_get_format(PyStructObject *self, void *unused)
 {
+    ENSURE_STRUCT_IS_READY(self);
     return PyUnicode_FromStringAndSize(PyBytes_AS_STRING(self->s_format),
                                        PyBytes_GET_SIZE(self->s_format));
 }
@@ -2180,6 +2202,7 @@ PyDoc_STRVAR(s_sizeof__doc__,
 static PyObject *
 s_sizeof(PyStructObject *self, void *unused)
 {
+    ENSURE_STRUCT_IS_READY(self);
     size_t size = _PyObject_SIZE(Py_TYPE(self)) + sizeof(formatcode);
     for (formatcode *code = self->s_codes; code->fmtdef != NULL; code++) {
         size += sizeof(formatcode);
@@ -2190,6 +2213,7 @@ s_sizeof(PyStructObject *self, void *unused)
 static PyObject *
 s_repr(PyStructObject *self)
 {
+    ENSURE_STRUCT_IS_READY(self);
     PyObject* fmt = PyUnicode_FromStringAndSize(
         PyBytes_AS_STRING(self->s_format), PyBytes_GET_SIZE(self->s_format));
     if (fmt == NULL) {
@@ -2474,8 +2498,7 @@ The optional first format char indicates byte order, size and alignment:\n\
 The remaining chars indicate types of args and must match exactly;\n\
 these can be preceded by a decimal repeat count:\n\
   x: pad byte (no data); c:char; b:signed byte; B:unsigned byte;\n\
-  ?: _Bool (requires C99; if not available, char is used instead)\n\
-  h:short; H:unsigned short; i:int; I:unsigned int;\n\
+  ?:_Bool; h:short; H:unsigned short; i:int; I:unsigned int;\n\
   l:long; L:unsigned long; f:float; d:double; e:half-float.\n\
 Special cases (preceding decimal count indicates length):\n\
   s:string (array of char); p: pascal string (with count byte).\n\

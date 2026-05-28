@@ -299,6 +299,15 @@ PyErr_SetString(PyObject *exception, const char *string)
     _PyErr_SetString(tstate, exception, string);
 }
 
+void
+_PyErr_SetLocaleString(PyObject *exception, const char *string)
+{
+    PyObject *value = PyUnicode_DecodeLocale(string, "surrogateescape");
+    if (value != NULL) {
+        PyErr_SetObject(exception, value);
+        Py_DECREF(value);
+    }
+}
 
 PyObject* _Py_HOT_FUNCTION
 PyErr_Occurred(void)
@@ -1521,14 +1530,15 @@ write_unraisable_exc(PyThreadState *tstate, PyObject *exc_type,
                      PyObject *exc_value, PyObject *exc_tb, PyObject *err_msg,
                      PyObject *obj)
 {
-    PyObject *file = _PySys_GetAttr(tstate, &_Py_ID(stderr));
+    PyObject *file;
+    if (_PySys_GetOptionalAttr(&_Py_ID(stderr), &file) < 0) {
+        return -1;
+    }
     if (file == NULL || file == Py_None) {
+        Py_XDECREF(file);
         return 0;
     }
 
-    /* Hold a strong reference to ensure that sys.stderr doesn't go away
-       while we use it */
-    Py_INCREF(file);
     int res = write_unraisable_exc_file(tstate, exc_type, exc_value, exc_tb,
                                         err_msg, obj, file);
     Py_DECREF(file);
@@ -1583,6 +1593,7 @@ format_unraisable_v(const char *format, va_list va, PyObject *obj)
     _Py_EnsureTstateNotNULL(tstate);
 
     PyObject *err_msg = NULL;
+    PyObject *hook = NULL;
     PyObject *exc_type, *exc_value, *exc_tb;
     _PyErr_Fetch(tstate, &exc_type, &exc_value, &exc_tb);
 
@@ -1627,7 +1638,12 @@ format_unraisable_v(const char *format, va_list va, PyObject *obj)
         goto error;
     }
 
-    PyObject *hook = _PySys_GetAttr(tstate, &_Py_ID(unraisablehook));
+    if (_PySys_GetOptionalAttr(&_Py_ID(unraisablehook), &hook) < 0) {
+        Py_DECREF(hook_args);
+        err_msg_str = NULL;
+        obj = NULL;
+        goto error;
+    }
     if (hook == NULL) {
         Py_DECREF(hook_args);
         goto default_hook;
@@ -1675,6 +1691,7 @@ done:
     Py_XDECREF(exc_value);
     Py_XDECREF(exc_tb);
     Py_XDECREF(err_msg);
+    Py_XDECREF(hook);
     _PyErr_Clear(tstate); /* Just in case */
 }
 

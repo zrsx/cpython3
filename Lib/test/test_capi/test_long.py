@@ -210,9 +210,8 @@ class LongTests(unittest.TestCase):
 
         self.assertEqual(func(min_val - 1), (-1, -1))
         self.assertEqual(func(max_val + 1), (-1, +1))
-
-        # CRASHES func(1.0)
-        # CRASHES func(NULL)
+        self.assertRaises(SystemError, func, None)
+        self.assertRaises(TypeError, func, 1.0)
 
     def test_long_asint(self):
         # Test PyLong_AsInt()
@@ -614,6 +613,16 @@ class LongTests(unittest.TestCase):
                 # Py_ASNATIVEBYTES_UNSIGNED_BUFFER flag instead
                 self.assertEqual(expect_u, fromnativebytes(v_be, n, 4, 1),
                     f"PyLong_FromNativeBytes(buffer, {n}, <big|unsigned>)")
+
+    def test_bug_143050(self):
+        with support.adjust_int_max_str_digits(0):
+            # Bug coming from using _pylong.int_from_string(), that
+            # currently requires > 6000 decimal digits.
+            int('-' + '0' * 7000, 10)
+            _testcapi.test_immortal_small_ints()
+            # Test also nonzero small int
+            int('-' + '0' * 7000 + '123', 10)
+            _testcapi.test_immortal_small_ints()
 
 
 if __name__ == "__main__":

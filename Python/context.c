@@ -264,12 +264,6 @@ PyContextVar_Set(PyObject *ovar, PyObject *val)
     ENSURE_ContextVar(ovar, NULL)
     PyContextVar *var = (PyContextVar *)ovar;
 
-    if (!PyContextVar_CheckExact(var)) {
-        PyErr_SetString(
-            PyExc_TypeError, "an instance of ContextVar was expected");
-        return NULL;
-    }
-
     PyContext *ctx = context_get();
     if (ctx == NULL) {
         return NULL;
@@ -823,14 +817,7 @@ contextvar_new(PyObject *name, PyObject *def)
         return NULL;
     }
 
-    var->var_hash = contextvar_generate_hash(var, name);
-    if (var->var_hash == -1) {
-        Py_DECREF(var);
-        return NULL;
-    }
-
     var->var_name = Py_NewRef(name);
-
     var->var_default = Py_XNewRef(def);
 
 #ifndef Py_GIL_DISABLED
@@ -838,6 +825,12 @@ contextvar_new(PyObject *name, PyObject *def)
     var->var_cached_tsid = 0;
     var->var_cached_tsver = 0;
 #endif
+
+    var->var_hash = contextvar_generate_hash(var, name);
+    if (var->var_hash == -1) {
+        Py_DECREF(var);
+        return NULL;
+    }
 
     if (_PyObject_GC_MAY_BE_TRACKED(name) ||
             (def != NULL && _PyObject_GC_MAY_BE_TRACKED(def)))
@@ -980,12 +973,6 @@ static PyObject *
 _contextvars_ContextVar_get_impl(PyContextVar *self, PyObject *default_value)
 /*[clinic end generated code: output=0746bd0aa2ced7bf input=30aa2ab9e433e401]*/
 {
-    if (!PyContextVar_CheckExact(self)) {
-        PyErr_SetString(
-            PyExc_TypeError, "an instance of ContextVar was expected");
-        return NULL;
-    }
-
     PyObject *val;
     if (PyContextVar_Get((PyObject *)self, default_value, &val) < 0) {
         return NULL;

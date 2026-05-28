@@ -313,6 +313,7 @@ class TestPartial:
 
     def test_setstate_errors(self):
         f = self.partial(signature)
+
         self.assertRaises(TypeError, f.__setstate__, (capture, (), {}))
         self.assertRaises(TypeError, f.__setstate__, (capture, (), {}, {}, None))
         self.assertRaises(TypeError, f.__setstate__, [capture, (), {}, None])
@@ -320,6 +321,8 @@ class TestPartial:
         self.assertRaises(TypeError, f.__setstate__, (capture, None, {}, None))
         self.assertRaises(TypeError, f.__setstate__, (capture, [], {}, None))
         self.assertRaises(TypeError, f.__setstate__, (capture, (), [], None))
+        self.assertRaises(TypeError, f.__setstate__, (capture, (), {}, ()))
+        self.assertRaises(TypeError, f.__setstate__, (capture, (), {}, 'test'))
 
     def test_setstate_subclasses(self):
         f = self.partial(signature)
@@ -410,6 +413,64 @@ class TestPartial:
         self.assertEqual(w.filename, __file__)
         self.assertEqual(a.cmeth(3, b=4), ((1, A, 3), {'a': 2, 'b': 4}))
         self.assertEqual(a.smeth(3, b=4), ((1, 3), {'a': 2, 'b': 4}))
+
+    def test_partial_genericalias(self):
+        alias = self.partial[int]
+        self.assertIs(alias.__origin__, self.partial)
+        self.assertEqual(alias.__args__, (int,))
+        self.assertEqual(alias.__parameters__, ())
+
+    # GH-144475: Tests that the partial object does not change until repr finishes
+    def test_repr_safety_against_reentrant_mutation(self):
+        g_partial = None
+
+        class Function:
+            def __init__(self, name):
+                self.name = name
+
+            def __call__(self):
+                return None
+
+            def __repr__(self):
+                return f"Function({self.name})"
+
+        class EvilObject:
+            def __init__(self):
+                self.triggered = False
+
+            def __repr__(self):
+                if not self.triggered and g_partial is not None:
+                    self.triggered = True
+                    new_args_tuple = (None,)
+                    new_keywords_dict = {"keyword": None}
+                    new_tuple_state = (Function("new_function"), new_args_tuple, new_keywords_dict, None)
+                    g_partial.__setstate__(new_tuple_state)
+                    gc.collect()
+                return f"EvilObject"
+
+        trigger = EvilObject()
+        func = Function("old_function")
+
+        g_partial = functools.partial(func, None, trigger=trigger)
+        self.assertEqual(repr(g_partial),"functools.partial(Function(old_function), None, trigger=EvilObject)")
+
+        trigger.triggered = False
+        g_partial = functools.partial(func, trigger, arg=None)
+        self.assertEqual(repr(g_partial),"functools.partial(Function(old_function), EvilObject, arg=None)")
+
+
+        trigger.triggered = False
+        g_partial = functools.partial(func, trigger, None)
+        self.assertEqual(repr(g_partial),"functools.partial(Function(old_function), EvilObject, None)")
+
+        trigger.triggered = False
+        g_partial = functools.partial(func, trigger=trigger, arg=None)
+        self.assertEqual(repr(g_partial),"functools.partial(Function(old_function), trigger=EvilObject, arg=None)")
+
+        trigger.triggered = False
+        g_partial = functools.partial(func, trigger, None, None, None, None, arg=None)
+        self.assertEqual(repr(g_partial),"functools.partial(Function(old_function), EvilObject, None, None, None, None, arg=None)")
+
 
 
 @unittest.skipUnless(c_functools, 'requires the C _functools module')
@@ -1333,6 +1394,16 @@ class TestCache:
             self.module._CacheInfo(hits=0, misses=0, maxsize=None, currsize=0))
 
 
+class TestCachePy(TestCache, unittest.TestCase):
+    module = py_functools
+
+
+@unittest.skipUnless(c_functools, 'requires the C _functools module')
+class TestCacheC(TestCache, unittest.TestCase):
+    if c_functools:
+        module = c_functools
+
+
 class TestLRU:
 
     def test_lru(self):
@@ -1766,8 +1837,7 @@ class TestLRU:
             time.sleep(.01)
             return 3 * x
         def test(i, x):
-            with self.subTest(thread=i):
-                self.assertEqual(f(x), 3 * x, i)
+            self.assertEqual(f(x), 3 * x, i)
         threads = [threading.Thread(target=test, args=(i, v))
                    for i, v in enumerate([1, 2, 2, 3, 2])]
         with threading_helper.start_threads(threads):
@@ -2742,6 +2812,7 @@ class TestSingleDispatch(unittest.TestCase):
                 """My function docstring"""
                 return str(arg)
 
+        prefix = A.__qualname__ + '.'
         for meth in (
             A.func,
             A().func,
@@ -2751,9 +2822,10 @@ class TestSingleDispatch(unittest.TestCase):
             A().static_func
         ):
             with self.subTest(meth=meth):
+                self.assertEqual(meth.__qualname__, prefix + meth.__name__)
                 self.assertEqual(meth.__doc__,
                                  ('My function docstring'
-                                  if support.HAVE_DOCSTRINGS
+                                  if support.HAVE_PY_DOCSTRINGS
                                   else None))
                 self.assertEqual(meth.__annotations__['arg'], int)
 
@@ -2845,7 +2917,7 @@ class TestSingleDispatch(unittest.TestCase):
             with self.subTest(meth=meth):
                 self.assertEqual(meth.__doc__,
                                  ('My function docstring'
-                                  if support.HAVE_DOCSTRINGS
+                                  if support.HAVE_PY_DOCSTRINGS
                                   else None))
                 self.assertEqual(meth.__annotations__['arg'], int)
 
@@ -3061,6 +3133,110 @@ class TestSingleDispatch(unittest.TestCase):
         self.assertEqual(f(""), "default")
         self.assertEqual(f(b""), "default")
 
+    def test_method_equal_instances(self):
+        # gh-127750: Reference to self was cached
+        class A:
+            def __eq__(self, other):
+                return True
+            def __hash__(self):
+                return 1
+            @functools.singledispatchmethod
+            def t(self, arg):
+                return self
+
+        a = A()
+        b = A()
+        self.assertIs(a.t(1), a)
+        self.assertIs(b.t(2), b)
+
+    def test_method_bad_hash(self):
+        class A:
+            def __eq__(self, other):
+                raise AssertionError
+            def __hash__(self):
+                raise AssertionError
+            @functools.singledispatchmethod
+            def t(self, arg):
+                pass
+
+        # Should not raise
+        A().t(1)
+        hash(A().t)
+        A().t == A().t
+
+    def test_method_no_reference_loops(self):
+        # gh-127750: Created a strong reference to self
+        class A:
+            @functools.singledispatchmethod
+            def t(self, arg):
+                return weakref.ref(self)
+
+        a = A()
+        r = a.t(1)
+        self.assertIsNotNone(r())
+        del a  # delete a after a.t
+        if not support.check_impl_detail(cpython=True):
+            support.gc_collect()
+        self.assertIsNone(r())
+
+        a = A()
+        t = a.t
+        del a # delete a before a.t
+        support.gc_collect()
+        r = t(1)
+        self.assertIsNotNone(r())
+        del t
+        if not support.check_impl_detail(cpython=True):
+            support.gc_collect()
+        self.assertIsNone(r())
+
+    def test_signatures(self):
+        @functools.singledispatch
+        def func(item, arg: int) -> str:
+            return str(item)
+        @func.register
+        def _(item: int, arg: bytes) -> str:
+            return str(item)
+
+        self.assertEqual(str(Signature.from_callable(func)),
+                         '(item, arg: int) -> str')
+
+    def test_method_signatures(self):
+        class A:
+            @functools.singledispatchmethod
+            def func(self, item, arg: int) -> str:
+                return str(item)
+            @func.register
+            def _(self, item: int, arg: bytes) -> str:
+                return str(item)
+
+            @functools.singledispatchmethod
+            @classmethod
+            def cls_func(cls, item, arg: int) -> str:
+                return str(arg)
+            @func.register
+            @classmethod
+            def _(cls, item: int, arg: bytes) -> str:
+                return str(item)
+
+            @functools.singledispatchmethod
+            @staticmethod
+            def static_func(item, arg: int) -> str:
+                return str(arg)
+            @func.register
+            @staticmethod
+            def _(item: int, arg: bytes) -> str:
+                return str(item)
+
+        self.assertEqual(str(Signature.from_callable(A.func)),
+                         '(self, item, arg: int) -> str')
+        self.assertEqual(str(Signature.from_callable(A().func)),
+                         '(self, item, arg: int) -> str')
+        self.assertEqual(str(Signature.from_callable(A.cls_func)),
+                         '(cls, item, arg: int) -> str')
+        self.assertEqual(str(Signature.from_callable(A.static_func)),
+                         '(item, arg: int) -> str')
+
 
 class CachedCostItem:
     _cost = 1
@@ -3191,7 +3367,7 @@ class TestCachedProperty(unittest.TestCase):
     def test_doc(self):
         self.assertEqual(CachedCostItem.cost.__doc__,
                          ("The cost of the item."
-                          if support.HAVE_DOCSTRINGS
+                          if support.HAVE_PY_DOCSTRINGS
                           else None))
 
     def test_module(self):

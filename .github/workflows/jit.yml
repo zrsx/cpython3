@@ -18,12 +18,14 @@ on:
       - '!**/*.ini'
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
+
+env:
+  FORCE_COLOR: 1
 
 jobs:
   interpreter:
@@ -31,7 +33,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - name: Build tier two interpreter
         run: |
           ./configure --enable-experimental-jit=interpreter --with-pydebug
@@ -65,23 +69,23 @@ jobs:
         include:
           - target: i686-pc-windows-msvc/msvc
             architecture: Win32
-            runner: windows-latest
+            runner: windows-2022
             compiler: msvc
           - target: x86_64-pc-windows-msvc/msvc
             architecture: x64
-            runner: windows-latest
+            runner: windows-2022
             compiler: msvc
           - target: aarch64-pc-windows-msvc/msvc
             architecture: ARM64
-            runner: windows-latest
+            runner: windows-2022
             compiler: msvc
           - target: x86_64-apple-darwin/clang
             architecture: x86_64
-            runner: macos-13
+            runner: macos-15-intel
             compiler: clang
           - target: aarch64-apple-darwin/clang
             architecture: aarch64
-            runner: macos-14
+            runner: macos-26
             compiler: clang
           - target: x86_64-unknown-linux-gnu/gcc
             architecture: x86_64
@@ -102,16 +106,17 @@ jobs:
     env:
       CC: ${{ matrix.compiler }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
 
       - name: Native Windows
         if: runner.os == 'Windows' && matrix.architecture != 'ARM64'
         run: |
-          choco upgrade llvm -y
-          choco install llvm --allow-downgrade --no-progress --version ${{ matrix.llvm }}
+          choco install llvm --allow-downgrade --no-progress --version ${{ matrix.llvm }}.1.0
           ./PCbuild/build.bat --experimental-jit ${{ matrix.debug && '-d' || '--pgo' }} -p ${{ matrix.architecture }}
           ./PCbuild/rt.bat ${{ matrix.debug && '-d' || '' }} -p ${{ matrix.architecture }} -q --multiprocess 0 --timeout 4500 --verbose2 --verbose3
 
@@ -119,8 +124,7 @@ jobs:
       - name: Emulated Windows
         if: runner.os == 'Windows' && matrix.architecture == 'ARM64'
         run: |
-          choco upgrade llvm -y
-          choco install llvm --allow-downgrade --no-progress --version ${{ matrix.llvm }}
+          choco install llvm --allow-downgrade --no-progress --version ${{ matrix.llvm }}.1.0
           ./PCbuild/build.bat --experimental-jit ${{ matrix.debug && '-d' || '' }} -p ${{ matrix.architecture }}
 
       - name: Native macOS
@@ -128,8 +132,8 @@ jobs:
         run: |
           brew update
           brew install llvm@${{ matrix.llvm }}
-          SDKROOT="$(xcrun --show-sdk-path)" \
-            ./configure --enable-experimental-jit ${{ matrix.debug && '--with-pydebug' || '--enable-optimizations --with-lto' }}
+          export SDKROOT="$(xcrun --show-sdk-path)"
+          ./configure --enable-experimental-jit ${{ matrix.debug && '--with-pydebug' || '--enable-optimizations --with-lto' }}
           make all --jobs 4
           ./python.exe -m test --multiprocess 0 --timeout 4500 --verbose2 --verbose3
 
@@ -167,9 +171,12 @@ jobs:
     name: Free-Threaded (Debug)
     needs: interpreter
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
       - name: Build with JIT enabled and GIL disabled

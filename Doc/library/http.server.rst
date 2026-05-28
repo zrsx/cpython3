@@ -114,7 +114,7 @@ provides three different variants:
       variable. This instance parses and manages the headers in the HTTP
       request. The :func:`~http.client.parse_headers` function from
       :mod:`http.client` is used to parse the headers and it requires that the
-      HTTP request provide a valid :rfc:`2822` style header.
+      HTTP request provide a valid :rfc:`5322` style header.
 
    .. attribute:: rfile
 
@@ -247,6 +247,8 @@ provides three different variants:
       specifying its value. Note that, after the send_header calls are done,
       :meth:`end_headers` MUST BE called in order to complete the operation.
 
+      This method does not reject input containing CRLF sequences.
+
       .. versionchanged:: 3.2
          Headers are stored in an internal buffer.
 
@@ -256,6 +258,8 @@ provides three different variants:
       Continue`` response is sent by the server to the client. The headers not
       buffered and sent directly the output stream.If the *message* is not
       specified, the HTTP message corresponding the response *code*  is sent.
+
+      This method does not reject *message* containing CRLF sequences.
 
       .. versionadded:: 3.2
 
@@ -389,8 +393,7 @@ provides three different variants:
       ``'Last-Modified:'`` header with the file's modification time.
 
       Then follows a blank line signifying the end of the headers, and then the
-      contents of the file are output. If the file's MIME type starts with
-      ``text/`` the file is opened in text mode; otherwise binary mode is used.
+      contents of the file are output.
 
       For example usage, see the implementation of the ``test`` function
       in :source:`Lib/http/server.py`.
@@ -418,49 +421,6 @@ the current directory::
 such as using different index file names by overriding the class attribute
 :attr:`index_pages`.
 
-.. _http-server-cli:
-
-:mod:`http.server` can also be invoked directly using the :option:`-m`
-switch of the interpreter.  Similar to
-the previous example, this serves files relative to the current directory::
-
-        python -m http.server
-
-The server listens to port 8000 by default. The default can be overridden
-by passing the desired port number as an argument::
-
-        python -m http.server 9000
-
-By default, the server binds itself to all interfaces.  The option ``-b/--bind``
-specifies a specific address to which it should bind. Both IPv4 and IPv6
-addresses are supported. For example, the following command causes the server
-to bind to localhost only::
-
-        python -m http.server --bind 127.0.0.1
-
-.. versionchanged:: 3.4
-   Added the ``--bind`` option.
-
-.. versionchanged:: 3.8
-   Support IPv6 in the ``--bind`` option.
-
-By default, the server uses the current directory. The option ``-d/--directory``
-specifies a directory to which it should serve the files. For example,
-the following command uses a specific directory::
-
-        python -m http.server --directory /tmp/
-
-.. versionchanged:: 3.7
-   Added the ``--directory`` option.
-
-By default, the server is conformant to HTTP/1.0. The option ``-p/--protocol``
-specifies the HTTP version to which the server is conformant. For example, the
-following command runs an HTTP/1.1 conformant server::
-
-        python -m http.server --protocol HTTP/1.1
-
-.. versionchanged:: 3.11
-   Added the ``--protocol`` option.
 
 .. class:: CGIHTTPRequestHandler(request, client_address, server)
 
@@ -510,25 +470,85 @@ following command runs an HTTP/1.1 conformant server::
       Retaining it could lead to further :ref:`security considerations
       <http.server-security>`.
 
-:class:`CGIHTTPRequestHandler` can be enabled in the command line by passing
-the ``--cgi`` option::
 
-        python -m http.server --cgi
+.. _http-server-cli:
 
-.. deprecated-removed:: 3.13 3.15
+Command-line interface
+----------------------
 
-   :mod:`http.server` command line ``--cgi`` support is being removed
-   because :class:`CGIHTTPRequestHandler` is being removed.
+:mod:`http.server` can also be invoked directly using the :option:`-m`
+switch of the interpreter.  The following example illustrates how to serve
+files relative to the current directory::
+
+   python -m http.server [OPTIONS] [port]
+
+The following options are accepted:
+
+.. program:: http.server
+
+.. option:: port
+
+   The server listens to port 8000 by default. The default can be overridden
+   by passing the desired port number as an argument::
+
+      python -m http.server 9000
+
+.. option:: -b, --bind <address>
+
+   Specifies a specific address to which it should bind. Both IPv4 and IPv6
+   addresses are supported. By default, the server binds itself to all
+   interfaces. For example, the following command causes the server to bind
+   to localhost only::
+
+      python -m http.server --bind 127.0.0.1
+
+   .. versionadded:: 3.4
+
+   .. versionchanged:: 3.8
+      Support IPv6 in the ``--bind`` option.
+
+.. option:: -d, --directory <dir>
+
+   Specifies a directory to which it should serve the files. By default,
+   the server uses the current directory. For example, the following command
+   uses a specific directory::
+
+      python -m http.server --directory /tmp/
+
+   .. versionadded:: 3.7
+
+.. option:: -p, --protocol <version>
+
+   Specifies the HTTP version to which the server is conformant. By default,
+   the server is conformant to HTTP/1.0. For example, the following command
+   runs an HTTP/1.1 conformant server::
+
+      python -m http.server --protocol HTTP/1.1
+
+   .. versionadded:: 3.11
+
+.. option:: --cgi
+
+   :class:`CGIHTTPRequestHandler` can be enabled in the command line by passing
+   the ``--cgi`` option::
+
+      python -m http.server --cgi
+
+   .. deprecated-removed:: 3.13 3.15
+
+      :mod:`http.server` command line ``--cgi`` support is being removed
+      because :class:`CGIHTTPRequestHandler` is being removed.
 
 .. warning::
 
-   :class:`CGIHTTPRequestHandler` and the ``--cgi`` command line option
+   :class:`CGIHTTPRequestHandler` and the ``--cgi`` command-line option
    are not intended for use by untrusted clients and may be vulnerable
    to exploitation. Always use within a secure environment.
 
+
 .. _http.server-security:
 
-Security Considerations
+Security considerations
 -----------------------
 
 .. index:: pair: http.server; security
@@ -536,6 +556,11 @@ Security Considerations
 :class:`SimpleHTTPRequestHandler` will follow symbolic links when handling
 requests, this makes it possible for files outside of the specified directory
 to be served.
+
+Methods :meth:`BaseHTTPRequestHandler.send_header` and
+:meth:`BaseHTTPRequestHandler.send_response_only` assume sanitized input
+and does not perform input validation such as checking for the presence of CRLF
+sequences. Untrusted input may result in HTTP Header injection attacks.
 
 Earlier versions of Python did not scrub control characters from the
 log messages emitted to stderr from ``python -m http.server`` or the

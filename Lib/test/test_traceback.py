@@ -18,10 +18,10 @@ import shutil
 from test.support import (Error, captured_output, cpython_only, ALWAYS_EQ,
                           requires_debug_ranges, has_no_debug_ranges,
                           requires_subprocess)
-from test.support.os_helper import TESTFN, unlink
-from test.support.script_helper import assert_python_ok, assert_python_failure
+from test.support.os_helper import TESTFN, temp_dir, unlink
+from test.support.script_helper import assert_python_ok, assert_python_failure, make_script
 from test.support.import_helper import forget
-from test.support import force_not_colorized
+from test.support import force_not_colorized, force_not_colorized_test_class
 
 import json
 import textwrap
@@ -376,6 +376,30 @@ class TracebackCases(unittest.TestCase):
             '   ValueError: 0\n',
         ])
 
+    def test_format_exception_group_syntax_error_with_custom_values(self):
+        # See https://github.com/python/cpython/issues/128894
+        for exc in [
+            SyntaxError('error', 'abcd'),
+            SyntaxError('error', [None] * 4),
+            SyntaxError('error', (1, 2, 3, 4)),
+            SyntaxError('error', (1, 2, 3, 4)),
+            SyntaxError('error', (1, 'a', 'b', 2)),
+            # with end_lineno and end_offset:
+            SyntaxError('error', 'abcdef'),
+            SyntaxError('error', [None] * 6),
+            SyntaxError('error', (1, 2, 3, 4, 5, 6)),
+            SyntaxError('error', (1, 'a', 'b', 2, 'c', 'd')),
+        ]:
+            with self.subTest(exc=exc):
+                err = traceback.format_exception_only(exc, show_group=True)
+                # Should not raise an exception:
+                if exc.lineno is not None:
+                    self.assertEqual(len(err), 2)
+                    self.assertTrue(err[0].startswith('  File'))
+                else:
+                    self.assertEqual(len(err), 1)
+                self.assertEqual(err[-1], 'SyntaxError: error\n')
+
     @requires_subprocess()
     @force_not_colorized
     def test_encoded_file(self):
@@ -480,6 +504,33 @@ class TracebackCases(unittest.TestCase):
                     b'ZeroDivisionError: division by zero']
         self.assertEqual(stderr.splitlines(), expected)
 
+    @cpython_only
+    def test_lost_io_open(self):
+        # GH-142737: Display the traceback even if io.open is lost
+        crasher = textwrap.dedent("""\
+            import io
+            import traceback
+            # Trigger fallback mode
+            traceback._print_exception_bltin = None
+            del io.open
+            raise RuntimeError("should not crash")
+        """)
+
+        # Create a temporary script to exercise _Py_FindSourceFile
+        with temp_dir() as script_dir:
+            script = make_script(
+                script_dir=script_dir,
+                script_basename='tb_test_no_io_open',
+                source=crasher)
+            rc, stdout, stderr = assert_python_failure(script)
+
+        self.assertEqual(rc, 1)  # Make sure it's not a crash
+
+        expected = [b'Traceback (most recent call last):',
+                    f'  File "{script}", line 6, in <module>'.encode(),
+                    b'RuntimeError: should not crash']
+        self.assertEqual(stderr.splitlines(), expected)
+
     def test_print_exception(self):
         output = StringIO()
         traceback.print_exception(
@@ -491,6 +542,12 @@ class TracebackCases(unittest.TestCase):
         output = StringIO()
         traceback.print_exception(Exception("projector"), file=output)
         self.assertEqual(output.getvalue(), "Exception: projector\n")
+
+    def test_print_last(self):
+        with support.swap_attr(sys, 'last_exc', ValueError(42)):
+            output = StringIO()
+            traceback.print_last(file=output)
+            self.assertEqual(output.getvalue(), "ValueError: 42\n")
 
     def test_format_exception_exc(self):
         e = Exception("projector")
@@ -1709,6 +1766,7 @@ class TracebackErrorLocationCaretTestBase:
 
 
 @requires_debug_ranges()
+@force_not_colorized_test_class
 class PurePythonTracebackErrorCaretTests(
     PurePythonExceptionFormattingMixin,
     TracebackErrorLocationCaretTestBase,
@@ -1722,6 +1780,7 @@ class PurePythonTracebackErrorCaretTests(
 
 @cpython_only
 @requires_debug_ranges()
+@force_not_colorized_test_class
 class CPythonTracebackErrorCaretTests(
     CAPIExceptionFormattingMixin,
     TracebackErrorLocationCaretTestBase,
@@ -1733,6 +1792,7 @@ class CPythonTracebackErrorCaretTests(
 
 @cpython_only
 @requires_debug_ranges()
+@force_not_colorized_test_class
 class CPythonTracebackLegacyErrorCaretTests(
     CAPIExceptionFormattingLegacyMixin,
     TracebackErrorLocationCaretTestBase,
@@ -2144,10 +2204,12 @@ context_message = (
 boundaries = re.compile(
     '(%s|%s)' % (re.escape(cause_message), re.escape(context_message)))
 
+@force_not_colorized_test_class
 class TestTracebackFormat(unittest.TestCase, TracebackFormatMixin):
     pass
 
 @cpython_only
+@force_not_colorized_test_class
 class TestFallbackTracebackFormat(unittest.TestCase, TracebackFormatMixin):
     DEBUG_RANGES = False
     def setUp(self) -> None:
@@ -2909,6 +2971,33 @@ class BaseExceptionReportingTests:
         report = self.get_report(exc)
         self.assertEqual(report, expected)
 
+    def test_exception_group_wrapped_naked(self):
+        # See gh-128799
+
+        def exc():
+            try:
+                raise Exception(42)
+            except* Exception as e:
+                raise
+
+        expected = (f'  + Exception Group Traceback (most recent call last):\n'
+                    f'  |   File "{__file__}", line {self.callable_line}, in get_exception\n'
+                    f'  |     exception_or_callable()\n'
+                    f'  |     ~~~~~~~~~~~~~~~~~~~~~^^\n'
+                    f'  |   File "{__file__}", line {exc.__code__.co_firstlineno + 3}, in exc\n'
+                    f'  |     except* Exception as e:\n'
+                    f'  |         raise\n'
+                    f'  | ExceptionGroup:  (1 sub-exception)\n'
+                    f'  +-+---------------- 1 ----------------\n'
+                    f'    | Traceback (most recent call last):\n'
+                    f'    |   File "{__file__}", line {exc.__code__.co_firstlineno + 2}, in exc\n'
+                    f'    |     raise Exception(42)\n'
+                    f'    | Exception: 42\n'
+                    f'    +------------------------------------\n')
+
+        report = self.get_report(exc)
+        self.assertEqual(report, expected)
+
     def test_KeyboardInterrupt_at_first_line_of_frame(self):
         # see GH-93249
         def f():
@@ -2935,6 +3024,7 @@ class BaseExceptionReportingTests:
         self.assertEqual(report, expected)
 
 
+@force_not_colorized_test_class
 class PyExcReportingTests(BaseExceptionReportingTests, unittest.TestCase):
     #
     # This checks reporting through the 'traceback' module, with both
@@ -2951,6 +3041,7 @@ class PyExcReportingTests(BaseExceptionReportingTests, unittest.TestCase):
         return s
 
 
+@force_not_colorized_test_class
 class CExcReportingTests(BaseExceptionReportingTests, unittest.TestCase):
     #
     # This checks built-in reporting by the interpreter.
@@ -3344,6 +3435,19 @@ class Unrepresentable:
     def __repr__(self) -> str:
         raise Exception("Unrepresentable")
 
+
+# Used in test_dont_swallow_cause_or_context_of_falsey_exception and
+# test_dont_swallow_subexceptions_of_falsey_exceptiongroup.
+class FalseyException(Exception):
+    def __bool__(self):
+        return False
+
+
+class FalseyExceptionGroup(ExceptionGroup):
+    def __bool__(self):
+        return False
+
+
 class TestTracebackException(unittest.TestCase):
     def do_test_smoke(self, exc, expected_type_str):
         try:
@@ -3689,6 +3793,24 @@ class TestTracebackException(unittest.TestCase):
              'ZeroDivisionError: division by zero',
              ''])
 
+    def test_dont_swallow_cause_or_context_of_falsey_exception(self):
+        # see gh-132308: Ensure that __cause__ or __context__ attributes of exceptions
+        # that evaluate as falsey are included in the output. For falsey term,
+        # see https://docs.python.org/3/library/stdtypes.html#truth-value-testing.
+
+        try:
+            raise FalseyException from KeyError
+        except FalseyException as e:
+            self.assertIn(cause_message, traceback.format_exception(e))
+
+        try:
+            try:
+                1/0
+            except ZeroDivisionError:
+                raise FalseyException
+        except FalseyException as e:
+            self.assertIn(context_message, traceback.format_exception(e))
+
 
 class TestTracebackException_ExceptionGroups(unittest.TestCase):
     def setUp(self):
@@ -3890,6 +4012,26 @@ class TestTracebackException_ExceptionGroups(unittest.TestCase):
         self.assertNotEqual(exc, object())
         self.assertEqual(exc, ALWAYS_EQ)
 
+    def test_dont_swallow_subexceptions_of_falsey_exceptiongroup(self):
+        # see gh-132308: Ensure that subexceptions of exception groups
+        # that evaluate as falsey are displayed in the output. For falsey term,
+        # see https://docs.python.org/3/library/stdtypes.html#truth-value-testing.
+
+        try:
+            raise FalseyExceptionGroup("Gih", (KeyError(), NameError()))
+        except Exception as ee:
+            str_exc = ''.join(traceback.format_exception(ee))
+            self.assertIn('+---------------- 1 ----------------', str_exc)
+            self.assertIn('+---------------- 2 ----------------', str_exc)
+
+        # Test with a falsey exception, in last position, as sub-exceptions.
+        msg = 'bool'
+        try:
+            raise FalseyExceptionGroup("Gah", (KeyError(), FalseyException(msg)))
+        except Exception as ee:
+            str_exc = traceback.format_exception(ee)
+            self.assertIn(f'{FalseyException.__name__}: {msg}', str_exc[-2])
+
 
 global_for_suggestions = None
 
@@ -3970,6 +4112,27 @@ class SuggestionFormattingTestBase:
         self.assertIn("'_bluch'", self.get_suggestion(partial(B().method, '_blach')))
         self.assertIn("'_bluch'", self.get_suggestion(partial(B().method, '_luch')))
         self.assertIn("'_bluch'", self.get_suggestion(partial(B().method, 'bluch')))
+
+    def test_getattr_suggestions_with_custom___dir__(self):
+        class M(type):
+            def __dir__(cls):
+                return [None, "fox"]
+
+        class C0:
+            def __dir__(self):
+                return [..., "bluch"]
+
+        class C1(C0, metaclass=M):
+            pass
+
+        self.assertNotIn("'bluch'", self.get_suggestion(C0, "blach"))
+        self.assertIn("'bluch'", self.get_suggestion(C0(), "blach"))
+
+        self.assertIn("'fox'", self.get_suggestion(C1, "foo"))
+        self.assertNotIn("'fox'", self.get_suggestion(C1(), "foo"))
+
+        self.assertNotIn("'bluch'", self.get_suggestion(C1, "blach"))
+        self.assertIn("'bluch'", self.get_suggestion(C1(), "blach"))
 
     def test_getattr_suggestions_do_not_trigger_for_long_attributes(self):
         class A:
@@ -4061,6 +4224,15 @@ class SuggestionFormattingTestBase:
         self.assertNotIn("blech", actual)
         self.assertNotIn("oh no!", actual)
 
+    def test_attribute_error_with_non_string_candidates(self):
+        class T:
+            bluch = 1
+
+        instance = T()
+        instance.__dict__[0] = 1
+        actual = self.get_suggestion(instance, 'blich')
+        self.assertIn("bluch", actual)
+
     def test_attribute_error_with_bad_name(self):
         def raise_attribute_error_with_bad_name():
             raise AttributeError(name=12, obj=23)
@@ -4096,8 +4268,8 @@ class SuggestionFormattingTestBase:
 
         return mod_name
 
-    def get_import_from_suggestion(self, mod_dict, name):
-        modname = self.make_module(mod_dict)
+    def get_import_from_suggestion(self, code, name):
+        modname = self.make_module(code)
 
         def callable():
             try:
@@ -4173,6 +4345,13 @@ class SuggestionFormattingTestBase:
         self.assertIn("'_bluch'", self.get_import_from_suggestion(code, '_blach'))
         self.assertIn("'_bluch'", self.get_import_from_suggestion(code, '_luch'))
         self.assertNotIn("'_bluch'", self.get_import_from_suggestion(code, 'bluch'))
+
+    def test_import_from_suggestions_non_string(self):
+        modWithNonStringAttr = textwrap.dedent("""\
+            globals()[0] = 1
+            bluch = 1
+        """)
+        self.assertIn("'bluch'", self.get_import_from_suggestion(modWithNonStringAttr, 'blech'))
 
     def test_import_from_suggestions_do_not_trigger_for_long_attributes(self):
         code = "blech = None"
@@ -4269,6 +4448,15 @@ class SuggestionFormattingTestBase:
             print(eval("ZeroDivisionErrrrr", custom_globals))
         actual = self.get_suggestion(func)
         self.assertIn("'ZeroDivisionError'?", actual)
+
+    def test_name_error_suggestions_with_non_string_candidates(self):
+        def func():
+            abc = 1
+            custom_globals = globals().copy()
+            custom_globals[0] = 1
+            print(eval("abv", custom_globals, locals()))
+        actual = self.get_suggestion(func)
+        self.assertIn("abc", actual)
 
     def test_name_error_suggestions_do_not_trigger_for_long_names(self):
         def func():
@@ -4434,6 +4622,28 @@ class SuggestionFormattingTestBase:
         actual = self.get_suggestion(instance.foo)
         self.assertNotIn("self.blech", actual)
 
+    def test_unbound_local_error_with_side_effect(self):
+        # gh-132385
+        class A:
+            def __getattr__(self, key):
+                if key == 'foo':
+                    raise AttributeError('foo')
+                if key == 'spam':
+                    raise ValueError('spam')
+
+            def bar(self):
+                foo
+            def baz(self):
+                spam
+
+        suggestion = self.get_suggestion(A().bar)
+        self.assertNotIn('self.', suggestion)
+        self.assertIn("'foo'", suggestion)
+
+        suggestion = self.get_suggestion(A().baz)
+        self.assertNotIn('self.', suggestion)
+        self.assertIn("'spam'", suggestion)
+
     def test_unbound_local_error_does_not_match(self):
         def func():
             something = 3
@@ -4547,6 +4757,36 @@ class MiscTest(unittest.TestCase):
                 # we receive is "strings not close enough".
                 res3 = traceback._levenshtein_distance(a, b, threshold)
                 self.assertGreater(res3, threshold, msg=(a, b, threshold))
+
+    @cpython_only
+    def test_suggestions_extension(self):
+        # Check that the C extension is available
+        import _suggestions
+
+        self.assertEqual(
+            _suggestions._generate_suggestions(
+                ["hello", "world"],
+                "hell"
+            ),
+            "hello"
+        )
+        self.assertEqual(
+            _suggestions._generate_suggestions(
+                ["hovercraft"],
+                "eels"
+            ),
+            None
+        )
+
+        # gh-131936: _generate_suggestions() doesn't accept list subclasses
+        class MyList(list):
+            pass
+
+        with self.assertRaises(TypeError):
+            _suggestions._generate_suggestions(MyList(), "")
+
+
+
 
 class TestColorizedTraceback(unittest.TestCase):
     def test_colorized_traceback(self):

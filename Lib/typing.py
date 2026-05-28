@@ -1024,15 +1024,8 @@ class ForwardRef(_Final, _root=True):
         if not isinstance(arg, str):
             raise TypeError(f"Forward reference must be a string -- got {arg!r}")
 
-        # If we do `def f(*args: *Ts)`, then we'll have `arg = '*Ts'`.
-        # Unfortunately, this isn't a valid expression on its own, so we
-        # do the unpacking manually.
-        if arg.startswith('*'):
-            arg_to_compile = f'({arg},)[0]'  # E.g. (*Ts,)[0] or (*tuple[int, int],)[0]
-        else:
-            arg_to_compile = arg
         try:
-            code = compile(arg_to_compile, '<string>', 'eval')
+            code = compile(_rewrite_star_unpack(arg), '<string>', 'eval')
         except SyntaxError:
             raise SyntaxError(f"Forward reference must be an expression -- got {arg!r}")
 
@@ -1119,6 +1112,16 @@ class ForwardRef(_Final, _root=True):
         return f'ForwardRef({self.__forward_arg__!r}{module_repr})'
 
 
+def _rewrite_star_unpack(arg):
+    """If the given argument annotation expression is a star unpack e.g. `'*Ts'`
+       rewrite it to a valid expression.
+       """
+    if arg.startswith("*"):
+        return f"({arg},)[0]"  # E.g. (*Ts,)[0] or (*tuple[int, int],)[0]
+    else:
+        return arg
+
+
 def _is_unpacked_typevartuple(x: Any) -> bool:
     return ((not isinstance(x, type)) and
             getattr(x, '__typing_is_unpacked_typevartuple__', False))
@@ -1191,7 +1194,7 @@ def _paramspec_prepare_subst(self, alias, args):
     params = alias.__parameters__
     i = params.index(self)
     if i == len(args) and self.has_default():
-        args = [*args, self.__default__]
+        args = (*args, self.__default__)
     if i >= len(args):
         raise TypeError(f"Too few arguments for {alias}")
     # Special case where Z[[int, str, bool]] == Z[int, str, bool] in PEP 612.
@@ -1236,14 +1239,26 @@ def _generic_class_getitem(cls, args):
                 f"Parameters to {cls.__name__}[...] must all be unique")
     else:
         # Subscripting a regular Generic subclass.
-        for param in cls.__parameters__:
+        try:
+            parameters = cls.__parameters__
+        except AttributeError as e:
+            init_subclass = getattr(cls, '__init_subclass__', None)
+            if init_subclass not in {None, Generic.__init_subclass__}:
+                e.add_note(
+                    f"Note: this exception may have been caused by "
+                    f"{init_subclass.__qualname__!r} (or the "
+                    f"'__init_subclass__' method on a superclass) not "
+                    f"calling 'super().__init_subclass__()'"
+                )
+            raise
+        for param in parameters:
             prepare = getattr(param, '__typing_prepare_subst__', None)
             if prepare is not None:
                 args = prepare(cls, args)
         _check_generic_specialization(cls, args)
 
         new_args = []
-        for param, new_arg in zip(cls.__parameters__, args):
+        for param, new_arg in zip(parameters, args):
             if isinstance(param, TypeVarTuple):
                 new_args.extend(new_arg)
             else:
@@ -1627,9 +1642,9 @@ class _SpecialGenericAlias(_NotIterable, _BaseGenericAlias, _root=True):
         self._nparams = nparams
         self._defaults = defaults
         if origin.__module__ == 'builtins':
-            self.__doc__ = f'A generic version of {origin.__qualname__}.'
+            self.__doc__ = f'Deprecated alias to {origin.__qualname__}.'
         else:
-            self.__doc__ = f'A generic version of {origin.__module__}.{origin.__qualname__}.'
+            self.__doc__ = f'Deprecated alias to {origin.__module__}.{origin.__qualname__}.'
 
     @_tp_cache
     def __getitem__(self, params):
@@ -1783,12 +1798,16 @@ class _UnionGenericAlias(_NotIterable, _GenericAlias, _root=True):
         return super().__repr__()
 
     def __instancecheck__(self, obj):
-        return self.__subclasscheck__(type(obj))
+        for arg in self.__args__:
+            if isinstance(obj, arg):
+                return True
+        return False
 
     def __subclasscheck__(self, cls):
         for arg in self.__args__:
             if issubclass(cls, arg):
                 return True
+        return False
 
     def __reduce__(self):
         func, (origin, args) = super().__reduce__()
@@ -2839,7 +2858,7 @@ MutableMapping = _alias(collections.abc.MutableMapping, 2)
 Sequence = _alias(collections.abc.Sequence, 1)
 MutableSequence = _alias(collections.abc.MutableSequence, 1)
 ByteString = _DeprecatedGenericAlias(
-    collections.abc.ByteString, 0, removal_version=(3, 14)  # Not generic.
+    collections.abc.ByteString, 0, removal_version=(3, 17)  # Not generic.
 )
 # Tuple accepts variable number of parameters.
 Tuple = _TupleType(tuple, -1, inst=False, name='Tuple')

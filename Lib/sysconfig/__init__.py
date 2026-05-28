@@ -220,8 +220,15 @@ if "_PYTHON_PROJECT_BASE" in os.environ:
 def is_python_build(check_home=None):
     if check_home is not None:
         import warnings
-        warnings.warn("check_home argument is deprecated and ignored.",
-                      DeprecationWarning, stacklevel=2)
+        warnings.warn(
+            (
+                'The check_home argument of sysconfig.is_python_build is '
+                'deprecated and its value is ignored. '
+                'It will be removed in Python 3.15.'
+            ),
+            DeprecationWarning,
+            stacklevel=2,
+        )
     for fn in ("Setup", "Setup.local"):
         if os.path.isfile(os.path.join(_PROJECT_BASE, "Modules", fn)):
             return True
@@ -589,17 +596,22 @@ def get_platform():
     isn't particularly important.
 
     Examples of returned values:
-       linux-i586
-       linux-alpha (?)
-       solaris-2.6-sun4u
 
-    Windows will return one of:
-       win-amd64 (64bit Windows on AMD64 (aka x86_64, Intel64, EM64T, etc)
-       win32 (all others - specifically, sys.platform is returned)
 
-    For other non-POSIX platforms, currently just returns 'sys.platform'.
+    Windows:
 
-    """
+    - win-amd64 (64-bit Windows on AMD64, aka x86_64, Intel64, and EM64T)
+    - win-arm64 (64-bit Windows on ARM64, aka AArch64)
+    - win32 (all others - specifically, sys.platform is returned)
+
+    POSIX based OS:
+
+    - linux-x86_64
+    - macosx-15.5-arm64
+    - macosx-26.0-universal2 (macOS on Apple Silicon or Intel)
+    - android-24-arm64_v8a
+
+    For other non-POSIX platforms, currently just returns :data:`sys.platform`."""
     if os.name == 'nt':
         if 'amd64' in sys.version.lower():
             return 'win-amd64'
@@ -632,11 +644,19 @@ def get_platform():
             release = get_config_var("ANDROID_API_LEVEL")
 
             # Wheel tags use the ABI names from Android's own tools.
+            # When Python is running on 32-bit ARM Android on a 64-bit ARM kernel,
+            # 'os.uname().machine' is 'armv8l'. Such devices run the same userspace
+            # code as 'armv7l' devices.
+            # During the build process of the Android testbed when targeting 32-bit ARM,
+            # '_PYTHON_HOST_PLATFORM' is 'arm-linux-androideabi', so 'machine' becomes
+            # 'arm'.
             machine = {
-                "x86_64": "x86_64",
-                "i686": "x86",
                 "aarch64": "arm64_v8a",
+                "arm": "armeabi_v7a",
                 "armv7l": "armeabi_v7a",
+                "armv8l": "armeabi_v7a",
+                "i686": "x86",
+                "x86_64": "x86_64",
             }[machine]
         else:
             # At least on Linux/Intel, 'machine' is the processor --
@@ -694,6 +714,9 @@ def expand_makefile_vars(s, vars):
     you're fine.  Returns a variable-expanded version of 's'.
     """
     import re
+
+    _findvar1_rx = r"\$\(([A-Za-z][A-Za-z0-9_]*)\)"
+    _findvar2_rx = r"\${([A-Za-z][A-Za-z0-9_]*)}"
 
     # This algorithm does multiple expansion, so if vars['foo'] contains
     # "${bar}", it will expand ${foo} to ${bar}, and then expand
