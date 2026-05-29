@@ -62,6 +62,8 @@ def list_python_modules(names: set[str]) -> None:
         if not filename.endswith(".py"):
             continue
         name = filename.removesuffix(".py")
+        if name.startswith("_sysconfigdata"):
+            continue
         names.add(name)
 
 

@@ -9,7 +9,7 @@ permissions: {}
 jobs:
   label:
     name: DO-NOT-MERGE / unresolved review
-    if: github.repository_owner == 'python'
+    if: github.repository_owner == 'zrsx'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read

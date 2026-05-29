@@ -3,7 +3,8 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "monthly"
+      interval: "daily"
+    rebase-strategy: auto
     labels:
       - "skip issue"
       - "skip news"
@@ -20,7 +21,8 @@ updates:
   - package-ecosystem: "pip"
     directory: "/Tools/"
     schedule:
-      interval: "monthly"
+      interval: "daily"
+    rebase-strategy: auto
     labels:
       - "skip issue"
       - "skip news"
