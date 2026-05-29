@@ -49,6 +49,7 @@ extern PyObject* PyInit__datetime(void);
 extern PyObject* PyInit__decimal(void);
 extern PyObject* PyInit_binascii(void);
 extern PyObject* PyInit__bz2(void);
+extern PyObject* PyInit__lzma(void);
 extern PyObject* PyInit_zlib(void);
 extern PyObject* PyInit__md5(void);
 extern PyObject* PyInit__sha1(void);
@@ -143,6 +144,7 @@ struct _inittab _PyImport_Inittab[] = {
     {"_decimal", PyInit__decimal},
     {"binascii", PyInit_binascii},
     {"_bz2", PyInit__bz2},
+    {"_lzma", PyInit__lzma},
     {"zlib", PyInit_zlib},
     {"_md5", PyInit__md5},
     {"_sha1", PyInit__sha1},

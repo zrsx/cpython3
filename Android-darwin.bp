@@ -41,6 +41,7 @@ filegroup {
         "Modules/_json.c",
         "Modules/_localemodule.c",
         "Modules/_lsprof.c",
+        "Modules/_lzmamodule.c",
         "Modules/_multiprocessing/multiprocessing.c",
         "Modules/_multiprocessing/posixshmem.c",
         "Modules/_multiprocessing/semaphore.c",

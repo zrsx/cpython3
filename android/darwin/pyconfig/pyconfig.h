@@ -259,6 +259,10 @@
    */
 /* #undef HAVE_DECL_TZNAME */
 
+/* Define to 1 if you have the declaration of `UT_NAMESIZE', and to 0 if you
+   don't. */
+#define HAVE_DECL_UT_NAMESIZE 1
+
 /* Define to 1 if you have the device macros. */
 #define HAVE_DEVICE_MACROS 1
 
@@ -521,6 +525,9 @@
 
 /* Define to 1 if you have the `getlogin' function. */
 #define HAVE_GETLOGIN 1
+
+/* Define to 1 if you have the `getlogin_r' function. */
+#define HAVE_GETLOGIN_R 1
 
 /* Define to 1 if you have the `getnameinfo' function. */
 #define HAVE_GETNAMEINFO 1
@@ -787,6 +794,9 @@
 /* Define this if you have the makedev macro. */
 #define HAVE_MAKEDEV 1
 
+/* Define if you have the 'MAXLOGNAME' constant. */
+#define HAVE_MAXLOGNAME 1
+
 /* Define to 1 if you have the `mbrtowc' function. */
 #define HAVE_MBRTOWC 1
 
@@ -830,7 +840,7 @@
 /* #undef HAVE_NCURSES */
 
 /* Define if you have the 'ncursesw' library */
-/* #undef HAVE_NCURSESW */
+#define HAVE_NCURSESW 1
 
 /* Define to 1 if you have the <ncursesw/curses.h> header file. */
 /* #undef HAVE_NCURSESW_CURSES_H */
@@ -1386,6 +1396,9 @@
 /* Define to 1 if you have the <sys/param.h> header file. */
 #define HAVE_SYS_PARAM_H 1
 
+/* Define to 1 if you have the <sys/pidfd.h> header file. */
+/* #undef HAVE_SYS_PIDFD_H */
+
 /* Define to 1 if you have the <sys/poll.h> header file. */
 #define HAVE_SYS_POLL_H 1
 
@@ -1492,8 +1505,8 @@
 /* Define to 1 if you have the `truncate' function. */
 #define HAVE_TRUNCATE 1
 
-/* Define to 1 if you have the `ttyname' function. */
-#define HAVE_TTYNAME 1
+/* Define to 1 if you have the `ttyname_r' function. */
+#define HAVE_TTYNAME_R 1
 
 /* Define to 1 if you don't have `tm_zone' but do have the external array
    `tzname'. */
@@ -1537,6 +1550,9 @@
 /* Define to 1 if you have the <utmp.h> header file. */
 #define HAVE_UTMP_H 1
 
+/* Define if you have the 'HAVE_UT_NAMESIZE' constant. */
+#define HAVE_UT_NAMESIZE 1
+
 /* Define to 1 if you have the `uuid_create' function. */
 /* #undef HAVE_UUID_CREATE */
 
@@ -1545,6 +1561,9 @@
 
 /* Define if uuid_generate_time_safe() exists. */
 /* #undef HAVE_UUID_GENERATE_TIME_SAFE */
+
+/* Define if uuid_generate_time_safe() is able to deduce a MAC address. */
+/* #undef HAVE_UUID_GENERATE_TIME_SAFE_STABLE_MAC */
 
 /* Define to 1 if you have the <uuid.h> header file. */
 /* #undef HAVE_UUID_H */
@@ -1596,7 +1615,7 @@
 #define HAVE_ZLIB_COPY 1
 
 /* Define to 1 if you have the <zlib.h> header file. */
-#define HAVE_ZLIB_H 1
+/* #undef HAVE_ZLIB_H */
 
 /* Define to 1 if you have the `_getpty' function. */
 /* #undef HAVE__GETPTY */
