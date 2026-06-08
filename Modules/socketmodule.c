@@ -6206,6 +6206,29 @@ socket_getprotobyname(PyObject *self, PyObject *args)
     sp = getprotobyname(name);
     Py_END_ALLOW_THREADS
     if (sp == NULL) {
+        /* Fallback for environments where getprotobyname fails (e.g., Android/Termux
+           which often lack /etc/protocols). We use a static internal table. */
+        static const struct {
+            const char *name;
+            int number;
+        } fallback_protocols[] = {
+            {"ip", 0},          {"icmp", 1},        {"igmp", 2},        {"ggp", 3},
+            {"ipencap", 4},     {"st", 5},          {"tcp", 6},         {"egp", 8},
+            {"pup", 12},        {"udp", 17},        {"hmp", 20},        {"xns-idp", 22},
+            {"iso-tp4", 29},    {"xtp", 36},        {"ddp", 37},        {"idpr-cmtp", 38},
+            {"ipv6", 41},       {"ipv6-route", 43}, {"ipv6-frag", 44},  {"idrp", 45},
+            {"rsvp", 46},       {"gre", 47},        {"esp", 50},        {"ah", 51},
+            {"skip", 57},       {"ipv6-icmp", 58},  {"ipv6-nonxt", 59}, {"ipv6-opts", 60},
+            {"rspf", 73},       {"vmtp", 81},       {"ospf", 89},       {"ipip", 94},
+            {"encap", 98},      {"pim", 103},       {"raw", 255}
+        };
+        size_t i;
+        for (i = 0; i < sizeof(fallback_protocols) / sizeof(fallback_protocols[0]); i++) {
+            if (strcmp(fallback_protocols[i].name, name) == 0) {
+                return PyLong_FromLong(fallback_protocols[i].number);
+            }
+        }
+
         PyErr_SetString(PyExc_OSError, "protocol not found");
         return NULL;
     }

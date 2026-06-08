@@ -17,6 +17,92 @@ posixshmem - A Python extension that provides shm_open() and shm_unlink()
 #endif
 
 
+#ifdef __ANDROID__
+/* Android's bionic libc lacks POSIX shared memory (shm_open/shm_unlink).
+ * We provide a fallback implementation that maps shared memory objects to
+ * regular files in the temporary directory (TMPDIR or /tmp). */
+#include <fcntl.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <errno.h>
+
+static char *android_shm_fname(const char *name) {
+    const char *tmpdir;
+    char *fname;
+    size_t tmpdir_len, namelen;
+
+    if (name == NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    /* Strip leading slashes */
+    while (name[0] == '/') ++name;
+    if (name[0] == '\0') {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    tmpdir = getenv("TMPDIR");
+    if (tmpdir == NULL || tmpdir[0] == '\0') {
+        tmpdir = "/tmp";
+    }
+
+    tmpdir_len = strlen(tmpdir);
+    namelen = strlen(name);
+
+    fname = (char *)malloc(tmpdir_len + 1 + namelen + 1);
+    if (fname == NULL) {
+        errno = ENOMEM;
+        return NULL;
+    }
+
+    memcpy(fname, tmpdir, tmpdir_len);
+    fname[tmpdir_len] = '/';
+    memcpy(fname + tmpdir_len + 1, name, namelen + 1);
+
+    return fname;
+}
+
+int shm_unlink(const char *name) {
+    char *fname = android_shm_fname(name);
+    int res;
+    if (fname == NULL) return -1;
+    res = unlink(fname);
+    free(fname);
+    return res;
+}
+
+int shm_open(const char *name, int oflag, mode_t mode) {
+    char *fname = android_shm_fname(name);
+    int fd;
+    if (fname == NULL) return -1;
+
+    fd = open(fname, oflag, mode);
+    free(fname);
+
+    if (fd != -1) {
+        int flags = fcntl(fd, F_GETFD, 0);
+        if (flags != -1) {
+            flags |= FD_CLOEXEC;
+            if (fcntl(fd, F_SETFD, flags) == -1) {
+                int save_errno = errno;
+                close(fd);
+                errno = save_errno;
+                return -1;
+            }
+        } else {
+            int save_errno = errno;
+            close(fd);
+            errno = save_errno;
+            return -1;
+        }
+    }
+    return fd;
+}
+#endif
+
 /*[clinic input]
 module _posixshmem
 [clinic start generated code]*/

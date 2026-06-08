@@ -18,7 +18,7 @@ pardir = '..'
 extsep = '.'
 sep = '/'
 pathsep = ':'
-defpath = '/bin:/usr/bin'
+defpath = f'{__import__("sys").prefix}/bin:/bin:/usr/bin'
 altsep = None
 devnull = '/dev/null'
 

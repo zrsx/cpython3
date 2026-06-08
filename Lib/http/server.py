@@ -1203,10 +1203,13 @@ class CGIHTTPRequestHandler(SimpleHTTPRequestHandler):
                 return
             # Child
             try:
-                try:
+                # Only attempt to drop privileges if running as root.
+                # This prevents unnecessary syscall failures and security
+                # policy violations (e.g., SELinux/seccomp) in restricted
+                # environments like Termux or containers, while preserving
+                # the security feature on standard multi-user servers.
+                if os.geteuid() == 0:
                     os.setuid(nobody)
-                except OSError:
-                    pass
                 os.dup2(self.rfile.fileno(), 0)
                 os.dup2(self.wfile.fileno(), 1)
                 os.execve(scriptfile, args, env)
