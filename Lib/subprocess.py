@@ -1845,7 +1845,7 @@ class Popen:
                 args = list(args)
 
             if shell:
-                unix_shell = shutil.which('sh') or '/bin/sh'
+                unix_shell = __import__('shutil').which('sh') or '/bin/sh'
                 args = [unix_shell, "-c"] + args
                 if executable:
                     args[0] = executable
