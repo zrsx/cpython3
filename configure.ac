@@ -350,6 +350,9 @@ then
 	ac_sys_release=
     else
 	ac_sys_system=`uname -s`
+        if test "$ac_sys_system" = "Linux" && test "x$(uname -o 2>/dev/null)" = "xAndroid"; then
+                ac_sys_system="Linux-android"
+        fi
 	if test "$ac_sys_system" = "AIX" \
 	-o "$ac_sys_system" = "UnixWare" -o "$ac_sys_system" = "OpenUNIX"; then
 		ac_sys_release=`uname -v`
@@ -366,7 +369,7 @@ then
     case $MACHDEP in
 	aix*) MACHDEP="aix";;
 	freebsd*) MACHDEP="freebsd";;
-	linux-android*) MACHDEP="android";;
+	android*|linux-android*) MACHDEP="android";;
 	linux*) MACHDEP="linux";;
 	cygwin*) MACHDEP="cygwin";;
 	darwin*) MACHDEP="darwin";;
@@ -1170,6 +1173,7 @@ dnl architecture. PLATFORM_TRIPLET will be a pair or single value for these
 dnl platforms.
 AC_MSG_CHECKING([for multiarch])
 AS_CASE([$ac_sys_system],
+  [Android*|Linux-android*], [MULTIARCH=""],
   [Darwin*], [MULTIARCH=""],
   [iOS], [MULTIARCH=""],
   [FreeBSD*], [MULTIARCH=""],
@@ -1562,6 +1566,11 @@ if test $enable_shared = "yes"; then
   AC_DEFINE([Py_ENABLE_SHARED], [1],
             [Defined if Python is built as a shared library.])
   case $ac_sys_system in
+    Android*|Linux-android*)
+      LDLIBRARY='libpython$(LDVERSION).so'
+      BLDLIBRARY='-L. -lpython$(LDVERSION)'
+      RUNSHARED=LD_LIBRARY_PATH=`pwd`${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+      ;;
     CYGWIN*)
       LDLIBRARY='libpython$(LDVERSION).dll.a'
       BLDLIBRARY='-L. -lpython$(LDVERSION)'
@@ -2492,7 +2501,7 @@ then
 fi
 
 AS_VAR_IF([ac_cv_gcc_compat], [yes], [
-    CFLAGS_NODIST="$CFLAGS_NODIST -std=c11"
+    CFLAGS_NODIST="$CFLAGS_NODIST -std=c17"
 
     PY_CHECK_CC_WARNING([enable], [extra], [if we can add -Wextra])
     AS_VAR_IF([ac_cv_enable_extra_warning], [yes],
@@ -3439,6 +3448,10 @@ then
 		BLDSHARED="Modules/ld_so_aix \$(CC) -bI:Modules/python.exp"
 		LDSHARED="\$(LIBPL)/ld_so_aix \$(CC) -bI:\$(LIBPL)/python.exp"
 		;;
+	Android*|Linux-android*)
+		LDSHARED='$(CC) -shared'
+		LDCXXSHARED='$(CXX) -shared'
+		;;
 	SunOS/5*)
 		if test "$ac_cv_gcc_compat" = "yes" ; then
 			LDSHARED='$(CC) -shared'
@@ -3581,6 +3594,7 @@ AC_MSG_CHECKING([CCSHARED])
 if test -z "$CCSHARED"
 then
 	case $ac_sys_system/$ac_sys_release in
+	Android*|Linux-android*) CCSHARED="-fPIC";;
 	SunOS*) if test "$ac_cv_gcc_compat" = "yes";
 		then CCSHARED="-fPIC";
 		elif test `uname -p` = sparc;
@@ -3620,10 +3634,10 @@ if test -z "$LINKFORSHARED"
 then
 	case $ac_sys_system/$ac_sys_release in
 	AIX*)	LINKFORSHARED='-Wl,-bE:Modules/python.exp -lld';;
+	Android*|Linux-android*) LINKFORSHARED="-pie -Xlinker -export-dynamic";;
 	hp*|HP*)
 	    LINKFORSHARED="-Wl,-E -Wl,+s";;
 #	    LINKFORSHARED="-Wl,-E -Wl,+s -Wl,+b\$(BINLIBDEST)/lib-dynload";;
-	Linux-android*) LINKFORSHARED="-pie -Xlinker -export-dynamic";;
 	Linux*|GNU*) LINKFORSHARED="-Xlinker -export-dynamic";;
 	# -u libsys_s pulls in all symbols in libsys
 	Darwin/*|iOS/*)
@@ -5243,10 +5257,6 @@ if test "$ac_sys_system" = "Linux-android"; then
   blocked_funcs="chroot initgroups setegid seteuid setgid sethostname
     setregid setresgid setresuid setreuid setuid"
 
-  # These functions are unimplemented and always return an error
-  # (https://android.googlesource.com/platform/system/sepolicy/+/refs/heads/android13-release/public/domain.te#1044)
-  blocked_funcs="$blocked_funcs sem_open sem_unlink"
-
   # Before API level 23, when fchmodat is called with the unimplemented flag
   # AT_SYMLINK_NOFOLLOW, instead of returning ENOTSUP as it should, it actually
   # follows the symlink.
@@ -6403,7 +6413,7 @@ LIBPYTHON=''
 # On Android and Cygwin the shared libraries must be linked with libpython.
 if test "$PY_ENABLE_SHARED" = "1" && ( test -n "$ANDROID_API_LEVEL" || test "$MACHDEP" = "cygwin"); then
   MODULE_DEPS_SHARED="$MODULE_DEPS_SHARED \$(LDLIBRARY)"
-  LIBPYTHON="\$(BLDLIBRARY)"
+  LIBPYTHON="-lpython${VERSION}${ABIFLAGS}"
 fi
 
 # On iOS the shared libraries must be linked with the Python framework

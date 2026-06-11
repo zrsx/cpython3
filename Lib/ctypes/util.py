@@ -172,12 +172,29 @@ elif sys.platform.startswith("aix"):
 
 elif sys.platform == "android":
     def find_library(name):
-        directory = "/system/lib"
-        if "64" in os.uname().machine:
-            directory += "64"
+        # Candidate directories for shared libraries on Android
+        directories = []
 
-        fname = f"{directory}/lib{name}.so"
-        return fname if os.path.isfile(fname) else None
+        # 1. Respect LD_LIBRARY_PATH
+        ld_path = os.environ.get("LD_LIBRARY_PATH")
+        if ld_path:
+            directories.extend(p for p in ld_path.split(os.pathsep) if p)
+
+        # 2. Add the Python environment's lib directory (crucial for Termux)
+        directories.append(os.path.join(sys.prefix, "lib"))
+
+        # 3. Fallback to standard Android system and vendor paths
+        if "64" in os.uname().machine:
+            directories.extend(["/system/lib64", "/vendor/lib64", "/odm/lib64"])
+        else:
+            directories.extend(["/system/lib", "/vendor/lib", "/odm/lib"])
+
+        # Search for the library in the candidate directories
+        for directory in directories:
+            fname = os.path.join(directory, f"lib{name}.so")
+            if os.path.isfile(fname):
+                return fname
+        return None
 
 elif sys.platform == "emscripten":
     def _is_wasm(filename):
@@ -284,7 +301,8 @@ elif os.name == "posix":
             # assuming GNU binutils / ELF
             if not f:
                 return None
-            objdump = shutil.which('objdump')
+            # Prefer llvm-objdump (Termux/macOS) but fallback to GNU objdump (Linux)
+            objdump = shutil.which('llvm-objdump') or shutil.which('objdump')
             if not objdump:
                 # objdump is not available, give up
                 return None
@@ -321,7 +339,9 @@ elif os.name == "posix":
             expr = os.fsencode(expr)
 
             try:
-                proc = subprocess.Popen(('/sbin/ldconfig', '-r'),
+                # Dynamically locate ldconfig (e.g., in $PREFIX/bin for Termux/Nix)
+                ldconfig = shutil.which('ldconfig') or '/sbin/ldconfig'
+                proc = subprocess.Popen((ldconfig, '-r'),
                                         stdout=subprocess.PIPE,
                                         stderr=subprocess.DEVNULL)
             except OSError:  # E.g. command not found
@@ -412,7 +432,11 @@ elif os.name == "posix":
         def _findLib_ld(name):
             # See issue #9998 for why this is needed
             expr = r'[^\(\)\s]*lib%s\.[^\(\)\s]*' % re.escape(name)
-            cmd = ['ld', '-t']
+            # Prefer ld.lld (Termux/Android/Clang) but fallback to GNU ld (Linux)
+            ld_exec = shutil.which('ld.lld') or shutil.which('ld')
+            if not ld_exec:
+                return None
+            cmd = [ld_exec, '-t']
             libpath = os.environ.get('LD_LIBRARY_PATH')
             if libpath:
                 for d in libpath.split(':'):

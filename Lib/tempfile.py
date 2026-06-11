@@ -171,7 +171,7 @@ def _candidate_tempdir_list():
                          _os.path.expandvars(r'%SYSTEMROOT%\Temp'),
                          r'c:\temp', r'c:\tmp', r'\temp', r'\tmp' ])
     else:
-        dirlist.extend([ '/tmp', '/var/tmp', '/usr/tmp' ])
+        dirlist.extend([ f'{_sys.prefix}/tmp', '/tmp', '/var/tmp', '/usr/tmp' ])
 
     # As a last resort, the current directory.
     try:

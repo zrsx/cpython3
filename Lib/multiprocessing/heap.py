@@ -70,7 +70,7 @@ else:
         """
 
         if sys.platform == 'linux':
-            _dir_candidates = ['/dev/shm']
+            _dir_candidates = ['/dev/shm'] if os.path.isdir('/dev/shm') else []
         else:
             _dir_candidates = []
 
