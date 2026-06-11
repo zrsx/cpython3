@@ -68,6 +68,7 @@ repos:
     rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
     hooks:
       - id: check-case-conflict
+        exclude: ^(Android|android)/
       - id: check-merge-conflict
       - id: check-toml
         exclude: ^Lib/test/test_tomllib/

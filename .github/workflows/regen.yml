@@ -131,7 +131,7 @@ jobs:
         run: |
           # Inject -static into LDFLAGS (targets only the linux_arm64 musl target LDFLAGS line)
           sed -i "s/unwindlib=none/unwindlib=none -static/g" android/regen.sh
-          
+
           # Prepend Google prebuilt compiler path to PATH
           export PATH="/home/runner/prebuilts/clang/host/linux-arm64/clang-r596125/bin:$PATH"
           ./android/regen.sh
@@ -163,7 +163,7 @@ jobs:
           mkdir -p dist/
           cp -r android dist/
           cp *.bp dist/
-          
+
           echo "Verified files inside staging folder (dist/):"
           ls -R dist/
 
