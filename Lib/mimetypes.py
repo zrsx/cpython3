@@ -50,7 +50,7 @@ knownfiles = [
     "/usr/local/lib/netscape/mime.types",
     "/usr/local/etc/httpd/conf/mime.types",     # Apache 1.2
     "/usr/local/etc/mime.types",                # Apache 1.3
-    os.path.join(sys.prefix, "etc", "mime.types"),
+    __import__('os').path.join(sys.prefix, "etc", "mime.types"),
     ]
 
 inited = False
