@@ -1,0 +1,2 @@
+_ssl _ssl.c
+_hashlib _hashopenssl.c
