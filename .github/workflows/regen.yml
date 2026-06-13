@@ -3,12 +3,17 @@ name: Regenerate CPython3 Android Artifacts
 on:
   workflow_dispatch: # Allows manual trigger from the GitHub Actions UI
 
+permissions:
+  contents: read
+
 jobs:
   regen-linux-x86_64:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - name: Install Dependencies
         run: |
@@ -58,7 +63,9 @@ jobs:
     runs-on: macos-14 # Native Apple Silicon ARM64 runner
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - name: Install Dependencies
         run: |
@@ -91,7 +98,9 @@ jobs:
     runs-on: ubuntu-24.04-arm # Native ARM64 runner
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - name: Install Dependencies
         run: |
@@ -126,12 +135,10 @@ jobs:
           git config core.sparseCheckout true
           echo "sysroots/*" >> .git/info/sparse-checkout
           git pull --depth=1 origin main
-
       - name: Run Regeneration
         run: |
           # Inject -static into LDFLAGS (targets only the linux_arm64 musl target LDFLAGS line)
           sed -i "s/unwindlib=none/unwindlib=none -static/g" android/regen.sh
-          
           # Prepend Google prebuilt compiler path to PATH
           export PATH="/home/runner/prebuilts/clang/host/linux-arm64/clang-r596125/bin:$PATH"
           ./android/regen.sh
@@ -149,7 +156,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - name: Download and Merge All Artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -162,8 +171,7 @@ jobs:
         run: |
           mkdir -p dist/
           cp -r android dist/
-          cp *.bp dist/
-          
+          cp ./*.bp dist/
           echo "Verified files inside staging folder (dist/):"
           ls -R dist/
 

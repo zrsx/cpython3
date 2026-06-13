@@ -13,7 +13,8 @@ on:
         required: true
         type: string
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   cifuzz:
@@ -23,12 +24,12 @@ jobs:
     steps:
       - name: Build fuzzers (${{ inputs.sanitizer }})
         id: build
-        uses: google/oss-fuzz/infra/cifuzz/actions/build_fuzzers@53a5831aa1a7651c2484877b7c4325e07e262779 # master
+        uses: google/oss-fuzz/infra/cifuzz/actions/build_fuzzers@2dd789c49ecc2baa41fc0409a86928e61d85315f # master
         with:
           oss-fuzz-project-name: ${{ inputs.oss-fuzz-project-name }}
           sanitizer: ${{ inputs.sanitizer }}
       - name: Run fuzzers (${{ inputs.sanitizer }})
-        uses: google/oss-fuzz/infra/cifuzz/actions/run_fuzzers@53a5831aa1a7651c2484877b7c4325e07e262779 # master
+        uses: google/oss-fuzz/infra/cifuzz/actions/run_fuzzers@2dd789c49ecc2baa41fc0409a86928e61d85315f # master
         with:
           fuzz-seconds: 600
           oss-fuzz-project-name: ${{ inputs.oss-fuzz-project-name }}
@@ -42,7 +43,7 @@ jobs:
           path: ./out/artifacts
       - name: Upload SARIF
         if: always() && steps.build.outcome == 'success'
-        uses: github/codeql-action/upload-sarif@87557b9c84dde89fdd9b10e88954ac2f4248e463 # v4.36.1
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
         with:
           sarif_file: cifuzz-sarif/results.sarif
           checkout_path: cifuzz-sarif
