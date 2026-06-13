@@ -2642,6 +2642,8 @@ class TestDateTime(TestDate):
 
     # Run with US-style DST rules: DST begins 2 a.m. on second Sunday in
     # March (M3.2.0) and ends 2 a.m. on first Sunday in November (M11.1.0).
+    @unittest.skipIf(sys.platform == "android",
+                 "Android/Bionic mktime DST behavior differs")
     @support.run_with_tz('EST+05EDT,M3.2.0,M11.1.0')
     def test_timestamp_naive(self):
         t = self.theclass(1970, 1, 1)

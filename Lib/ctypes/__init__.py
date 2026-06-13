@@ -558,11 +558,53 @@ class LibraryLoader(object):
 cdll = LibraryLoader(CDLL)
 pydll = LibraryLoader(PyDLL)
 
+# --- pythonapi: a ctypes handle exposing the running interpreter's
+# C API (Py*, PyObject_* symbols), used for callbacks and direct
+# CPython C-API access from pure-Python ctypes code.
+#
+# The handle must be constructed differently depending on the
+# interpreter's link model:
+#
+#   * Shared builds (Py_ENABLE_SHARED): libpython is a separate
+#     dynamic object that the executable links against. LDLIBRARY
+#     names that object and is normally a valid dlopen() target via
+#     the same search mechanism (rpath/SONAME) the executable itself
+#     uses.
+#
+#   * Static / embedded builds (not Py_ENABLE_SHARED): the
+#     interpreter's object code is linked directly into the
+#     executable, or into a host object for embedding scenarios.
+#     There is no separate dynamic object to name; the
+#     self-referential process handle (dlopen(NULL) on POSIX) is the
+#     correct representation, provided the executable/host was linked
+#     with -export-dynamic / -rdynamic so its symbols are visible to
+#     its own dynamic linker.
+#
+#   * Windows: handled separately via sys.dllhandle, which CPython
+#     already holds a reference to and which uses a different
+#     acquisition mechanism than dlopen-by-name/NULL entirely.
+#
+# Py_ENABLE_SHARED is a build-time fact and is used as the primary,
+# deterministic classifier -- it requires no platform name checks and
+# no filename-pattern inspection (.so/.a/.dll), both of which vary
+# across platforms and build configurations (e.g. free-threaded
+# builds use libpythonX.Yt.a) without affecting the underlying link
+# model this code actually needs to know about.
+#
+# Py_ENABLE_SHARED == True does not, however, guarantee that
+# LDLIBRARY is a valid dlopen() target at *runtime* in every
+# packaging or embedding scenario (repackaged library paths, SONAME
+# mismatches, libpython relocated relative to the executable). In
+# that case, fall back to the self-referential handle -- the same
+# mechanism static builds rely on -- rather than failing import of
+# ctypes entirely.
 if _os.name == "nt":
     pythonapi = PyDLL("python dll", None, _sys.dllhandle)
-elif _sys.platform in ["android", "cygwin"]:
-    # These are Unix-like platforms which use a dynamically-linked libpython.
-    pythonapi = PyDLL(_sysconfig.get_config_var("LDLIBRARY"))
+elif _sysconfig.get_config_var("Py_ENABLE_SHARED"):
+    try:
+        pythonapi = PyDLL(_sysconfig.get_config_var("LDLIBRARY"))
+    except OSError:
+        pythonapi = PyDLL(None)
 else:
     pythonapi = PyDLL(None)
 
