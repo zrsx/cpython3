@@ -423,9 +423,8 @@ is considered equivalent to the expression ``['-f', 'foo', '-f', 'bar']``.
 
 .. note::
 
-   Empty lines are treated as empty strings (``''``), which are allowed as values but
-   not as arguments. Empty lines that are read as arguments will result in an
-   "unrecognized arguments" error.
+   Each line is treated as a single argument, so an empty line is read as an
+   empty string (``''``).
 
 :class:`ArgumentParser` uses :term:`filesystem encoding and error handler`
 to read the file containing arguments.
@@ -953,6 +952,10 @@ is used when no command-line argument was present::
    >>> parser.parse_args([])
    Namespace(foo=42)
 
+Because ``nargs='*'`` gathers any supplied values into a list, an absent
+positional argument yields an empty list (``[]``). Only a non-``None``
+*default* overrides this (so ``default=None`` still gives ``[]``).
+
 For required_ arguments, the ``default`` value is ignored. For example, this
 applies to positional arguments with nargs_ values other than ``?`` or ``*``,
 or optional arguments marked as ``required=True``.
@@ -1266,6 +1269,10 @@ behavior::
    >>> parser.parse_args('--foo XXX'.split())
    Namespace(bar='XXX')
 
+Multiple arguments may share the same ``dest``.  By default, the value from the
+last such argument given on the command line wins.  Use ``action='append'`` to
+collect values from all of them into a list instead.  For conflicting *option
+strings* rather than ``dest`` names, see conflict_handler_.
 
 .. _deprecated:
 
@@ -1661,6 +1668,11 @@ Subcommands
    present, and when the ``b`` command is specified, only the ``foo`` and
    ``baz`` attributes are present.
 
+   If a subparser defines an argument with the same ``dest`` as the parent
+   parser, the two share a single namespace attribute, so the parent's value
+   won't be retained. Users should give them  distinct ``dest`` values to
+   keep both.
+
    Similarly, when a help message is requested from a subparser, only the help
    for that particular parser will be printed.  The help message will not
    include parent parser or sibling parser messages.  (A help message for each
@@ -1828,7 +1840,7 @@ FileType objects
       Namespace(infile=<_io.TextIOWrapper name='<stdin>' encoding='UTF-8'>)
 
    .. versionchanged:: 3.4
-      Added the *encodings* and *errors* parameters.
+      Added the *encoding* and *errors* parameters.
 
 
 Argument groups
@@ -1887,6 +1899,9 @@ Argument groups
 
    Note that any arguments not in your user-defined groups will end up back
    in the usual "positional arguments" and "optional arguments" sections.
+
+   Within each argument group, arguments are displayed in help output in the
+   order in which they are added.
 
    .. versionchanged:: 3.11
     Calling :meth:`add_argument_group` on an argument group is deprecated.
@@ -2084,6 +2099,9 @@ Customizing file parsing
     class MyArgumentParser(argparse.ArgumentParser):
         def convert_arg_line_to_args(self, arg_line):
             return arg_line.split()
+
+   Note that with this override an argument can no longer contain spaces, since
+   each space-separated word becomes a separate argument.
 
 
 Exiting methods

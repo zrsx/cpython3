@@ -486,14 +486,25 @@ class LibraryLoader(object):
 cdll = LibraryLoader(CDLL)
 pydll = LibraryLoader(PyDLL)
 
+_DYNLIB_SUFFIXES = (".so", ".dylib", ".dll")
+
 if _os.name == "nt":
     pythonapi = PyDLL("python dll", None, _sys.dllhandle)
-elif _sys.platform in ["android", "cygwin"]:
-    # These are Unix-like platforms which use a dynamically-linked libpython.
-    pythonapi = PyDLL(_sysconfig.get_config_var("LDLIBRARY"))
+elif _sysconfig.get_config_var("Py_ENABLE_SHARED"):
+    _ldlibrary = _sysconfig.get_config_var("LDLIBRARY") or ""
+    if _ldlibrary.endswith(_DYNLIB_SUFFIXES):
+        try:
+            pythonapi = PyDLL(_ldlibrary)
+        except OSError:
+            pythonapi = PyDLL(None)
+    else:
+        # Py_ENABLE_SHARED is set, but LDLIBRARY doesn't have the
+        # form of a dynamic object -- inconsistent build metadata.
+        # Don't attempt to dlopen() something that clearly isn't a
+        # shared library; go straight to the self-referential handle.
+        pythonapi = PyDLL(None)
 else:
     pythonapi = PyDLL(None)
-
 
 if _os.name == "nt":
     windll = LibraryLoader(WinDLL)
