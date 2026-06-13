@@ -2146,10 +2146,32 @@ case "$CC_BASENAME" in
         fi
         ;;
       *)
-        AX_CHECK_COMPILE_FLAG(
-            [-fprofile-update=atomic],
-            [PGO_PROF_GEN_FLAG="-fprofile-generate -fprofile-update=atomic"],
-            [PGO_PROF_GEN_FLAG="-fprofile-generate"])
+        # Check for 32-bit x86 ISA
+        AC_CACHE_CHECK([for i686], [ac_cv_i686], [
+            AC_COMPILE_IFELSE([
+                AC_LANG_PROGRAM([
+                    #ifdef __i386__
+                    #  error "i386"
+                    #endif
+                ], [])
+            ],[ac_cv_i686=no],[ac_cv_i686=yes])
+        ])
+
+        PGO_PROF_GEN_FLAG="-fprofile-generate"
+
+        # Use -fprofile-update=atomic to fix a random GCC internal error on PGO
+        # build (gh-145801) caused by corruption of profile data (.gcda files).
+        #
+        # gh-148535: On i686, using -fprofile-update=atomic makes the PGO build
+        # way slower (up to 47x slower). So far, the GCC internal error on PGO
+        # build was not seen on i686, so don't use this flag on i686.
+        AS_VAR_IF([ac_cv_i686], [no], [
+            AX_CHECK_COMPILE_FLAG(
+                [-fprofile-update=atomic],
+                [PGO_PROF_GEN_FLAG="$PGO_PROF_GEN_FLAG -fprofile-update=atomic"],
+                [])
+        ])
+
         PGO_PROF_USE_FLAG="-fprofile-use -fprofile-correction"
         LLVM_PROF_MERGER="true"
         LLVM_PROF_FILE=""
@@ -3581,6 +3603,7 @@ AC_MSG_CHECKING([CCSHARED])
 if test -z "$CCSHARED"
 then
 	case $ac_sys_system/$ac_sys_release in
+	Android*|Linux-android*) CCSHARED="-fPIC";;
 	SunOS*) if test "$GCC" = yes;
 		then CCSHARED="-fPIC";
 		elif test `uname -p` = sparc;
@@ -5229,7 +5252,7 @@ fi
 # checks for library functions
 AC_CHECK_FUNCS([ \
   accept4 alarm bind_textdomain_codeset chmod chown clock closefrom close_range confstr \
-  copy_file_range ctermid dup dup3 execv explicit_bzero explicit_memset \
+  copy_file_range ctermid dup execv explicit_bzero explicit_memset \
   faccessat fchmod fchmodat fchown fchownat fdopendir fdwalk fexecve \
   fork fork1 fpathconf fstatat ftime ftruncate futimens futimes futimesat \
   gai_strerror getegid geteuid getgid getgrent getgrgid getgrgid_r \
@@ -5239,7 +5262,7 @@ AC_CHECK_FUNCS([ \
   getspnam getuid getwd grantpt if_nameindex initgroups kill killpg lchown linkat \
   lockf lstat lutimes madvise mbrtowc memrchr mkdirat mkfifo mkfifoat \
   mknod mknodat mktime mmap mremap nice openat opendir pathconf pause pipe \
-  pipe2 plock poll posix_fadvise posix_fallocate posix_openpt posix_spawn posix_spawnp \
+  plock poll posix_fadvise posix_fallocate posix_openpt posix_spawn posix_spawnp \
   posix_spawn_file_actions_addclosefrom_np \
   pread preadv preadv2 process_vm_readv pthread_cond_timedwait_relative_np pthread_condattr_setclock pthread_init \
   pthread_kill ptsname ptsname_r pwrite pwritev pwritev2 readlink readlinkat readv realpath renameat \
@@ -5267,7 +5290,7 @@ fi
 # header definition prevents usage - autoconf doesn't use the headers), or
 # raise an error if used at runtime. Force these symbols off.
 if test "$ac_sys_system" != "iOS" ; then
-  AC_CHECK_FUNCS([getentropy getgroups system])
+  AC_CHECK_FUNCS([dup3 getentropy getgroups pipe2 system])
 fi
 
 AC_CHECK_DECL([dirfd],
