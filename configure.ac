@@ -3449,8 +3449,8 @@ then
 		LDSHARED="\$(LIBPL)/ld_so_aix \$(CC) -bI:\$(LIBPL)/python.exp"
 		;;
 	Android*|Linux-android*)
-		LDSHARED='$(CC) -shared'
-		LDCXXSHARED='$(CXX) -shared'
+		LDSHARED='$(CC) -shared -L.'
+		LDCXXSHARED='$(CXX) -shared -L.'
 		;;
 	SunOS/5*)
 		if test "$ac_cv_gcc_compat" = "yes" ; then

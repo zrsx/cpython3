@@ -91,6 +91,8 @@ class InterpreterPoolMixin(ExecutorMixin):
         self.skipTest("InterpreterPoolExecutor doesn't support events")
 
 
+@unittest.skipIf(support.is_android, "Bionic lacks
+functioning POSIX semaphores (sem_open returns ENOSYS)")
 class ProcessPoolForkMixin(ExecutorMixin):
     executor_type = futures.ProcessPoolExecutor
     ctx = "fork"

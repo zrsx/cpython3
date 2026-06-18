@@ -40,7 +40,7 @@ def _put_wait_put(queue, event):
     # We should never get here since the event will not get set
     queue.put('finished')
 
-
+@unittest.skipIf(support.is_android, "Bionic lacks functioning POSIX semaphores (sem_open returns ENOSYS)")
 class ProcessPoolExecutorTest(ExecutorTest):
 
     @unittest.skipUnless(sys.platform=='win32', 'Windows-only process limit')

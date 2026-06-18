@@ -50,7 +50,6 @@ knownfiles = [
     "/usr/local/lib/netscape/mime.types",
     "/usr/local/etc/httpd/conf/mime.types",     # Apache 1.2
     "/usr/local/etc/mime.types",                # Apache 1.3
-    __import__('os').path.join(__import__('sys').prefix, "etc", "mime.types"),
     ]
 
 inited = False
@@ -404,6 +403,7 @@ def add_type(type, ext, strict=True):
 
 
 def init(files=None):
+    import os, sys
     global suffix_map, types_map, encodings_map, common_types
     global inited, _db
     inited = True    # so that MimeTypes.__init__() doesn't call us again
@@ -414,9 +414,9 @@ def init(files=None):
         db.read_windows_registry()
 
         if files is None:
-            files = knownfiles
+            files = knownfiles + [os.path.join(sys.prefix, "etc", "mime.types")]
         else:
-            files = knownfiles + list(files)
+            files = knownfiles + [os.path.join(sys.prefix, "etc", "mime.types")] + list(files)
     else:
         db = _db
 
