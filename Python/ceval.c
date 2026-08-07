@@ -366,7 +366,9 @@ _Py_EnterRecursiveCallUnchecked(PyThreadState *tstate)
     }
 }
 
-#if defined(__s390x__)
+#if defined(_Py_LINKER_THREAD_STACK_SIZE)
+#  define Py_C_STACK_SIZE _Py_LINKER_THREAD_STACK_SIZE
+#elif defined(__s390x__)
 #  define Py_C_STACK_SIZE 320000
 #elif defined(_WIN32)
    // Don't define Py_C_STACK_SIZE, ask the O/S
@@ -1081,6 +1083,7 @@ _PyObjectArray_FromStackRefArray(_PyStackRef *input, Py_ssize_t nargs, PyObject 
         // +1 in case PY_VECTORCALL_ARGUMENTS_OFFSET is set.
         result = PyMem_Malloc((nargs + 1) * sizeof(PyObject *));
         if (result == NULL) {
+            PyErr_NoMemory();
             return NULL;
         }
         result++;

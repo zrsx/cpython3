@@ -2385,9 +2385,15 @@ _asyncio_Task___init___impl(TaskObj *self, PyObject *coro, PyObject *loop,
     if (self->task_name == NULL) {
         return -1;
     }
-
+#ifdef Py_GIL_DISABLED
+    // This is required so that _Py_TryIncref(self)
+    // works correctly in non-owning threads.
+    _PyObject_SetMaybeWeakref((PyObject *)self);
+#endif
     if (eager_start) {
-        PyObject *res = PyObject_CallMethodNoArgs(loop, &_Py_ID(is_running));
+        // gh-154695: loop may be None here, future_init() resolved it into task_loop.
+        PyObject *res = PyObject_CallMethodNoArgs(self->task_loop,
+                                                  &_Py_ID(is_running));
         if (res == NULL) {
             return -1;
         }
@@ -2404,11 +2410,6 @@ _asyncio_Task___init___impl(TaskObj *self, PyObject *coro, PyObject *loop,
     if (task_call_step_soon(state, self, NULL)) {
         return -1;
     }
-#ifdef Py_GIL_DISABLED
-    // This is required so that _Py_TryIncref(self)
-    // works correctly in non-owning threads.
-    _PyObject_SetMaybeWeakref((PyObject *)self);
-#endif
     register_task(self);
     return 0;
 }
@@ -2994,13 +2995,17 @@ TaskObj_dealloc(PyObject *self)
     if (PyObject_CallFinalizerFromDealloc(self) < 0) {
         return; // resurrected
     }
+    // Untrack the object before unregistering the task, since the
+    // latter can cause a stop-the-world pause, after which another
+    // thread might call the GC and reach the object while it is
+    // semi-deallocated but still tracked
+    PyObject_GC_UnTrack(self);
+
     // unregister the task after finalization so that
     // if the task gets resurrected, it remains registered
     unregister_task((TaskObj *)self);
 
     PyTypeObject *tp = Py_TYPE(self);
-    PyObject_GC_UnTrack(self);
-
     PyObject_ClearWeakRefs(self);
 
     (void)TaskObj_clear(self);
