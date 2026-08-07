@@ -187,8 +187,14 @@
 /* Define if you have the 'ctermid_r' function. */
 /* #undef HAVE_CTERMID_R */
 
+/* Define if you have the 'ESCDELAY' variable. */
+#define HAVE_CURSES_ESCDELAY 1
+
 /* Define if you have the 'filter' function. */
 #define HAVE_CURSES_FILTER 1
+
+/* Define if you have the 'getmouse' function with the X/Open signature. */
+#define HAVE_CURSES_GETMOUSE 1
 
 /* Define to 1 if you have the <curses.h> header file. */
 #define HAVE_CURSES_H 1
@@ -211,8 +217,17 @@
 /* Define if you have the 'resize_term' function. */
 #define HAVE_CURSES_RESIZE_TERM 1
 
+/* Define if you have the 'set_escdelay' function. */
+#define HAVE_CURSES_SET_ESCDELAY 1
+
+/* Define if you have the 'set_tabsize' function. */
+#define HAVE_CURSES_SET_TABSIZE 1
+
 /* Define if you have the 'syncok' function. */
 #define HAVE_CURSES_SYNCOK 1
+
+/* Define if you have the 'TABSIZE' variable. */
+#define HAVE_CURSES_TABSIZE 1
 
 /* Define if you have the 'typeahead' function. */
 #define HAVE_CURSES_TYPEAHEAD 1
@@ -301,6 +316,9 @@
 
 /* Define to 1 if you have the 'dlopen' function. */
 #define HAVE_DLOPEN 1
+
+/* Define to 1 if you have the 'dl_iterate_phdr' function. */
+#define HAVE_DL_ITERATE_PHDR 1
 
 /* Define to 1 if you have the 'dup' function. */
 #define HAVE_DUP 1
@@ -1357,6 +1375,9 @@
 /* Define to 1 if you have the 'sysconf' function. */
 #define HAVE_SYSCONF 1
 
+/* Define to 1 if you have the 'sysctlbyname' function. */
+/* #undef HAVE_SYSCTLBYNAME */
+
 /* Define to 1 if you have the <sysexits.h> header file. */
 #define HAVE_SYSEXITS_H 1
 
@@ -1460,6 +1481,9 @@
 
 /* Define to 1 if you have the <sys/syscall.h> header file. */
 #define HAVE_SYS_SYSCALL_H 1
+
+/* Define to 1 if you have the <sys/sysctl.h> header file. */
+#define HAVE_SYS_SYSCTL_H 1
 
 /* Define to 1 if you have the <sys/sysmacros.h> header file. */
 #define HAVE_SYS_SYSMACROS_H 1
@@ -2025,6 +2049,9 @@
 
 /* HACL* library can compile SIMD256 implementations */
 #define _Py_HACL_CAN_COMPILE_VEC256 1
+
+/* Thread stack size set by the linker (in bytes). */
+/* #undef _Py_LINKER_THREAD_STACK_SIZE */
 
 /* Define to 1 if the machine stack grows down (default); 0 if it grows up. */
 #define _Py_STACK_GROWS_DOWN 1
