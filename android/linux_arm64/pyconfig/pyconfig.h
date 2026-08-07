@@ -184,8 +184,14 @@
 /* Define if you have the 'ctermid_r' function. */
 /* #undef HAVE_CTERMID_R */
 
+/* Define if you have the 'ESCDELAY' variable. */
+/* #undef HAVE_CURSES_ESCDELAY */
+
 /* Define if you have the 'filter' function. */
 /* #undef HAVE_CURSES_FILTER */
+
+/* Define if you have the 'getmouse' function with the X/Open signature. */
+/* #undef HAVE_CURSES_GETMOUSE */
 
 /* Define to 1 if you have the <curses.h> header file. */
 /* #undef HAVE_CURSES_H */
@@ -208,8 +214,17 @@
 /* Define if you have the 'resize_term' function. */
 /* #undef HAVE_CURSES_RESIZE_TERM */
 
+/* Define if you have the 'set_escdelay' function. */
+/* #undef HAVE_CURSES_SET_ESCDELAY */
+
+/* Define if you have the 'set_tabsize' function. */
+/* #undef HAVE_CURSES_SET_TABSIZE */
+
 /* Define if you have the 'syncok' function. */
 /* #undef HAVE_CURSES_SYNCOK */
+
+/* Define if you have the 'TABSIZE' variable. */
+/* #undef HAVE_CURSES_TABSIZE */
 
 /* Define if you have the 'typeahead' function. */
 /* #undef HAVE_CURSES_TYPEAHEAD */
@@ -1325,6 +1340,9 @@
 /* Define to 1 if you have the `sysconf' function. */
 #define HAVE_SYSCONF 1
 
+/* Define to 1 if you have the `sysctlbyname' function. */
+/* #undef HAVE_SYSCTLBYNAME */
+
 /* Define to 1 if you have the <sysexits.h> header file. */
 #define HAVE_SYSEXITS_H 1
 
@@ -1428,6 +1446,9 @@
 
 /* Define to 1 if you have the <sys/syscall.h> header file. */
 #define HAVE_SYS_SYSCALL_H 1
+
+/* Define to 1 if you have the <sys/sysctl.h> header file. */
+/* #undef HAVE_SYS_SYSCTL_H */
 
 /* Define to 1 if you have the <sys/sysmacros.h> header file. */
 #define HAVE_SYS_SYSMACROS_H 1
